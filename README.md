@@ -1,0 +1,90 @@
+# llm-mkv-translate
+
+Translate subtitles between any two languages with an LLM, review them in a separate pass, and get back a verified MKV. The video and audio are never re-encoded.
+
+Works on anime, TV series and films. Takes the subtitle track inside an MKV, or an ASS/SRT file. Bring your own model: OpenAI-compatible APIs (OpenAI, Gemini, OpenRouter, Ollama, LM Studio…), Codex, Claude Code or Antigravity.
+
+> **Status: early.** It started as one person's tool for their own viewing and is still being developed. Translation quality is not guaranteed. Bug reports and ideas are welcome in [issues](../../issues).
+
+## What it does
+
+- Reads the whole series and each episode first: characters, who addresses whom and how, terminology, tone.
+- Translates in chunks, then runs an independent review pass. Deliberately broken "trap" lines test whether the reviewer is paying attention.
+- If a good human translation in your target language is already in the folder or the MKV, scores it and uses it instead of translating.
+- Keeps ASS tags, timing and styles.
+- Remuxes without re-encoding and verifies with SHA-256 that video and audio packets did not change.
+- Checks that embedded fonts actually contain the characters of your language, and falls back to Source Sans 3 (Latin, Greek, Cyrillic) or a font you supply.
+- Adds, by default: a language-level report for language learners, on-screen warnings for scenes you may want to skip, and chapter marks at natural viewing breaks. Each can be turned off.
+- Resumes where it stopped. Previous outputs are archived, not deleted.
+
+## Requirements
+
+- Python 3 with no extra packages (developed on 3.15)
+- `ffmpeg` and `ffprobe`
+- One model provider from the table below
+- macOS is where it was developed and run. Linux is expected to work but is untested. Windows is unsupported.
+
+| Backend | What you need | Tested with a real model |
+|---|---|---|
+| `agy` | Antigravity CLI, signed in | Yes, full run |
+| `codex` | Codex CLI, signed in | Yes, full run |
+| `openai` | Any OpenAI-compatible endpoint and, usually, an API key in an environment variable | Not yet, only against a local mock server |
+| `claude-code` | Claude Code CLI, signed in | Not yet, only with mocked replies |
+
+## Quick start
+
+```bash
+git clone https://github.com/Abdulaziz-kiran/llm-mkv-translate.git
+cd llm-mkv-translate
+python3 tests.py                    # no model calls, costs nothing
+python3 llm_mkv_translate.py --setup   # choose provider and model, runs one tiny test call
+```
+
+```bash
+# Episodes in a folder, English to Spanish
+python3 llm_mkv_translate.py "<folder>" --title "<Show>" --target es --episodes 1-12
+
+# A film
+python3 llm_mkv_translate.py "<video.mkv>" --title "<Film>" --target de --movie
+
+# Subtitle file only, no MKV
+python3 llm_mkv_translate.py "<file.ass>" --title "<Show>" --target fr --episode 1
+
+# Other source language
+python3 llm_mkv_translate.py "<folder>" --title "<Show>" --source ja --target en
+```
+
+Language codes are ISO 639-1 or 639-2. Run `python3 llm_mkv_translate.py --help` for every option. Common ones: `--season N`, `--source-subtitle FILE`, `--audio-lang CODE`, `--redo`, `--no-human-check`, `--no-level-report`, `--no-content-warnings`, `--no-break-chapters`, `--no-mux`, `--detach`.
+
+Output goes to `~/llm-mkv-translate/` (`--output` changes it). Finished MKVs are in `watch/`, subtitles in `library/`, the full record of each job in `jobs/`.
+
+Copy [config.example.json](config.example.json) to `config.json` to change models per role, chunk sizes and paths. The translation style lives in [guide.md](guide.md), and `guides/<language>.md` adds rules for one target language. A [Turkish guide](guides/tr.md) is included; guides for other languages are welcome.
+
+[SKILL.md](SKILL.md) tells coding agents how to run the tool.
+
+## Privacy
+
+The program sends subtitle text to the provider you choose, and to nothing else. Job records stay on your computer; they contain file paths and titles.
+
+After a run, it can ask whether you want to share an anonymous report. It is off unless you answer yes. You see the exact text first. It contains only the tool version, OS, provider type, language pair, counts, durations and error categories, never titles, file names, paths or subtitle text. Saying yes only produces a pre-filled GitHub issue link, posted publicly under your own account when you submit it yourself. `--no-share-prompt` removes the question.
+
+## Known limitations
+
+- Image-based subtitles (PGS) are not read. There is no OCR.
+- It translates from a subtitle, not from audio, so errors in the source subtitle carry over.
+- Right-to-left scripts have no special handling and are untested.
+- For scripts outside Latin, Greek and Cyrillic you need to pass `--fallback-font` if the embedded fonts lack the characters.
+- On very long series the series guide gets compressed, and a new season only extends the memory.
+- Review corrections are not themselves checked and can occasionally lose meaning.
+- Tests do not call a model; model behaviour is only visible in real runs. Real runs so far are few.
+- Internal Python identifiers are in Turkish, for now.
+
+## Copyright
+
+This repository holds code and instructions only, no video or subtitle files. You are responsible for the rights to whatever you process.
+
+The code is under the [MIT License](LICENSE). Source Sans 3 in `fonts/` is under the [SIL Open Font License](fonts/OFL.txt).
+
+## Türkçe
+
+Altyazıları yapay zekâ ile istediğiniz dile çevirir (Türkçe altyazı çeviri dahil), ayrı bir adımda inceler ve videoyu yeniden kodlamadan MKV olarak paketler. Anime, dizi ve film için. Kurulum için yukarıdaki adımlar geçerli, Türkçe için örnek: `--target tr`. Türkçeye özel çeviri kuralları [guides/tr.md](guides/tr.md) dosyasındadır.

@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.tmp
+.DS_Store
+config.json
+
+# Media never belongs in this repository
+*.mkv
+*.mp4
+*.ass
+*.srt
+*.vtt
