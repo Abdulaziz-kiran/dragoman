@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Make one tiny structured request to a deliberately configured backend."""
 import argparse
-import llm_mkv_translate as app
+import dragoman as app
 
 
 def main():

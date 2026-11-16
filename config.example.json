@@ -3,7 +3,7 @@
   "model": "your-model-name",
   "base_url": "https://api.openai.com/v1",
   "api_key_env": "OPENAI_API_KEY",
-  "output_dir": "~/llm-mkv-translate",
+  "output_dir": "~/dragoman",
   "translate_chunk": 100,
   "review_chunk": 60,
   "parallel": 3,

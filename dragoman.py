@@ -23,11 +23,11 @@ import threading
 import time
 from pathlib import Path
 
-SURUM = "1.0.0"
+SURUM = "1.1.0"
 KOK = Path(__file__).resolve().parent
 EV = Path.home()
 VARSAYILAN = {
-    "output_dir": "~/llm-mkv-translate",
+    "output_dir": "~/dragoman",
     "backend": None, "model": None,
     "base_url": "https://api.openai.com/v1", "api_key_env": "OPENAI_API_KEY",
     "translate_chunk": 100, "review_chunk": 60, "parallel": 3,
@@ -130,7 +130,7 @@ def configure(a: dict, source: str, target: str, source_name=None, target_name=N
     if TARGET["iso3"] == "und":
         log("WARNING: unknown two-letter target has no ISO 639-2 mapping; track metadata will use und. Supply a three-letter code for an exact tag.")
     if a.get("backend") not in ("openai", "agy", "codex", "claude-code") or not a.get("model"):
-        raise ValueError("Backend and model are required; run --setup or use: python3 llm_mkv_translate.py INPUT --target es --backend openai --model gpt-4.1-mini")
+        raise ValueError("Backend and model are required; run --setup or use: python3 dragoman.py INPUT --target es --backend openai --model gpt-4.1-mini")
     for role in ("translate", "review", "series", "warnings", "level"):
         a["model_" + role] = a.get("model_" + role) or a["model"]
     BACKEND_CONFIG = dict(a)
@@ -1012,7 +1012,7 @@ Translation guide:
     if okunamayan:
         mevcut += "\n\n> Note: episodes unread due to content safety: " + ", ".join(okunamayan)
     hedef.parent.mkdir(parents=True, exist_ok=True)
-    hedef.write_text(f"<!-- {eser} series guide · llm-mkv-translate {SURUM} · {a['model_series']} · {dt.date.today()} · source {aralik} -->\n\n"
+    hedef.write_text(f"<!-- {eser} series guide · dragoman {SURUM} · {a['model_series']} · {dt.date.today()} · source {aralik} -->\n\n"
                      + mevcut + "\n", encoding="utf-8")
     log(f"Series guide written: {hedef}")
     return hedef
@@ -2116,7 +2116,7 @@ RUN_STATS = {"stage_tokens": {}, "errors": set()}
 ERROR_CATEGORIES = frozenset(("quota", "safety_block", "schema_invalid", "timeout", "mux_failed", "authentication", "configuration", "connection", "other"))
 STAGES = ("translate", "review", "series", "context", "warnings", "level", "breaks", "human")
 FEATURES = ("level_report", "content_warnings", "break_chapters", "human_check")
-ISSUE_URL = "https://github.com/Abdulaziz-kiran/llm-mkv-translate/issues/new"
+ISSUE_URL = "https://github.com/Abdulaziz-kiran/dragoman/issues/new"
 
 
 def config_path(config=None) -> Path:
@@ -2314,7 +2314,7 @@ def _urlquote(text: str) -> str:
 
 def issue_url(report: dict) -> str:
     body = report_text(report)
-    make_url = lambda body: ISSUE_URL + "?title=" + _urlquote("Anonymous llm-mkv-translate run report") + "&body=" + _urlquote(body)
+    make_url = lambda body: ISSUE_URL + "?title=" + _urlquote("Anonymous dragoman run report") + "&body=" + _urlquote(body)
     url = make_url(body)
     if len(url) >= 6000:
         # Drop per-stage detail first; all other fields are bounded by construction.
@@ -2329,7 +2329,7 @@ def share_report(a: dict, jobs: list[dict], elapsed: float, errors=(), *, config
     report = anonymous_report(a, jobs, elapsed, errors)
     url = issue_url(report)
     # Display exactly the text prefilled in the issue, including size-based omissions.
-    visible = report if len(ISSUE_URL + "?title=" + _urlquote("Anonymous llm-mkv-translate run report") + "&body=" + _urlquote(report_text(report))) < 6000 else {key: value for key, value in report.items() if key != "stage_tokens"}
+    visible = report if len(ISSUE_URL + "?title=" + _urlquote("Anonymous dragoman run report") + "&body=" + _urlquote(report_text(report))) < 6000 else {key: value for key, value in report.items() if key != "stage_tokens"}
     print("\nAnonymous report:\n" + report_text(visible))
     print("This would be posted publicly as a GitHub issue under your own account. Nothing is sent by this program; you submit it yourself.")
     try:
@@ -2372,7 +2372,7 @@ def failed_job_report(a: dict, eser: str, sezon: int, no: int | None, error) -> 
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(prog="llm-mkv-translate", description="Translate and review subtitles, then verify and mux an MKV")
+    ap = argparse.ArgumentParser(prog="dragoman", description="Translate and review subtitles, then verify and mux an MKV")
     ap.add_argument("girdi", nargs="?", metavar="INPUT", help="video, video directory, or ASS/SRT file")
     ap.add_argument("--target", help="target ISO 639-1 or 639-2 code (required for translation)")
     ap.add_argument("--source", default="en", help="source language code (default: en)")
@@ -2382,7 +2382,7 @@ def main() -> None:
     ap.add_argument("--config", help="configuration JSON (default: config.json beside script)")
     ap.add_argument("--backend", choices=["openai", "agy", "codex", "claude-code"])
     ap.add_argument("--model", help="model for all roles (role settings in config take precedence)")
-    ap.add_argument("--output", help="output root (default: ~/llm-mkv-translate/)")
+    ap.add_argument("--output", help="output root (default: ~/dragoman/)")
     ap.add_argument("--fallback-font", action="append", help="fallback font path; repeat to set preference order")
     ap.add_argument("--title", dest="eser", metavar="TITLE", help="production title (default: inferred from input)")
     ap.add_argument("--season", dest="sezon", metavar="SEASON", type=int, default=1)
@@ -2437,7 +2437,7 @@ def main() -> None:
                         continue
                     a[key] = configured[key]
         if not a.get("backend") or not a.get("model"):
-            ap.error("Backend and model are required; run --setup or use: python3 llm_mkv_translate.py INPUT --target es --backend openai --model gpt-4.1-mini")
+            ap.error("Backend and model are required; run --setup or use: python3 dragoman.py INPUT --target es --backend openai --model gpt-4.1-mini")
     try:
         configure(a, x.source, x.target, x.source_name, x.target_name)
     except ValueError as error:

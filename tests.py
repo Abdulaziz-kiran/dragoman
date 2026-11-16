@@ -3,7 +3,7 @@
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
-import llm_mkv_translate as A
+import dragoman as A
 from unittest.mock import patch
 import socket
 
@@ -416,7 +416,7 @@ for secenekler in (["--redo"], ["--level-only", "--redo"], []):
         fcntl.flock(kilit, fcntl.LOCK_EX | fcntl.LOCK_NB)
         stack.enter_context(patch.object(A, "ayarlar", return_value=a))
         stack.enter_context(patch.object(A.shutil, "which", return_value=None))
-        stack.enter_context(patch.object(sys, "argv", ["llm-mkv-translate", str(girdi), "--target", "tr", "--title", "Seri"] + secenekler))
+        stack.enter_context(patch.object(sys, "argv", ["dragoman", str(girdi), "--target", "tr", "--title", "Seri"] + secenekler))
         tasima = stack.enter_context(patch.object(A.shutil, "move"))
         kaynak = stack.enter_context(patch.object(A, "kaynagi_hazirla"))
         insan = stack.enter_context(patch.object(A, "insan_secimi"))
@@ -453,7 +453,7 @@ with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
     stack.enter_context(patch.object(A.shutil, "which", return_value=None))
     stack.enter_context(patch.object(A, "duzey_isle", side_effect=duzey))
     insan = stack.enter_context(patch.object(A, "insan_secimi"))
-    stack.enter_context(patch.object(sys, "argv", ["llm-mkv-translate", str(girdi), "--target", "tr", "--title", "Seri", "--level-only", "--redo"]))
+    stack.enter_context(patch.object(sys, "argv", ["dragoman", str(girdi), "--target", "tr", "--title", "Seri", "--level-only", "--redo"]))
     try:
         A.main()
         cikis = None
@@ -500,7 +500,7 @@ for kullan in (True, False):
         for nesne, ad, kw in [
             (A, "ayarlar", {"return_value": a}), (A.shutil, "which", {"return_value": None}),
             (A, "kaynagi_hazirla", {"side_effect": kaynak}), (A, "insan_secimi", {"side_effect": sec}),
-            (sys, "argv", {"new": ["llm-mkv-translate", str(girdi), "--target", "tr", "--title", "Seri", "--redo"] + (["--no-mux"] if kullan else [])}),
+            (sys, "argv", {"new": ["dragoman", str(girdi), "--target", "tr", "--title", "Seri", "--redo"] + (["--no-mux"] if kullan else [])}),
         ]:
             stack.enter_context(patch.object(nesne, ad, **kw))
         A.main()
@@ -592,14 +592,14 @@ for args, expected in ((["missing.ass"], "--target"), (["missing.ass", "--target
                        (["missing.ass", "--target", "es", "--backend", "agy"], "Backend and model"),
                        (["missing.ass", "--target", "es", "--model", "fake"], "Backend and model")):
     stderr = io.StringIO()
-    with patch.object(sys, "argv", ["llm-mkv-translate", *args]), patch.object(A, "ayarlar", return_value=dict(A.VARSAYILAN)), contextlib.redirect_stderr(stderr), patch.object(A.subprocess, "Popen") as proc:
+    with patch.object(sys, "argv", ["dragoman", *args]), patch.object(A, "ayarlar", return_value=dict(A.VARSAYILAN)), contextlib.redirect_stderr(stderr), patch.object(A.subprocess, "Popen") as proc:
         try:
             A.main()
             rejected = False
         except SystemExit as error:
             rejected = error.code == 2
     kontrol("Required CLI configuration fails before work: " + expected, rejected and expected in stderr.getvalue() and not proc.called)
-with patch.object(sys, "argv", ["llm-mkv-translate", "--help"]), contextlib.redirect_stdout(io.StringIO()) as help_output:
+with patch.object(sys, "argv", ["dragoman", "--help"]), contextlib.redirect_stdout(io.StringIO()) as help_output:
     try:
         A.main()
     except SystemExit as error:
@@ -812,7 +812,7 @@ with tempfile.TemporaryDirectory() as td:
     source_file = td / "source.ass"
     source_file.write_text(SYNTHETIC_ASS)
     output = td / "output"
-    cli_args = ["llm-mkv-translate", str(source_file), "--target", "es", "--backend", "agy", "--model", "fake",
+    cli_args = ["dragoman", str(source_file), "--target", "es", "--backend", "agy", "--model", "fake",
                 "--title", "Example series", "--episode", "1", "--output", str(output), "--no-mux", "--no-level-report", "--no-content-warnings", "--no-break-chapters", "--no-share-prompt"]
     calls = []
     def fake_pipeline_model(model, prompt, schema, timeout, **kwargs):
@@ -898,7 +898,7 @@ with tempfile.TemporaryDirectory() as td:
 # Main's setup-only command needs neither subtitle input nor a target language.
 for tty in (True, False):
     stderr = io.StringIO()
-    with patch.object(sys, "argv", ["llm-mkv-translate", "--setup"]), patch.object(A, "interactive", return_value=tty), patch.object(A, "setup", return_value=True) as setup_call, contextlib.redirect_stderr(stderr):
+    with patch.object(sys, "argv", ["dragoman", "--setup"]), patch.object(A, "interactive", return_value=tty), patch.object(A, "setup", return_value=True) as setup_call, contextlib.redirect_stderr(stderr):
         try:
             A.main()
         except SystemExit as error:
@@ -909,7 +909,7 @@ for tty in (True, False):
 with tempfile.TemporaryDirectory() as td:
     td=Path(td)
     source=td/"source.ass";source.write_text(SYNTHETIC_ASS)
-    args=["llm-mkv-translate",str(source),"--target","es","--title","Provider test","--episode","1","--output",str(td/"output"),"--no-share-prompt"]
+    args=["dragoman",str(source),"--target","es","--title","Provider test","--episode","1","--output",str(td/"output"),"--no-share-prompt"]
     for tty in (False, True):
         questions=[]; stderr=io.StringIO()
         def decline(question):
@@ -920,7 +920,7 @@ with tempfile.TemporaryDirectory() as td:
             except SystemExit as error:
                 code=error.code
         kontrol("Missing-backend TTY offer or non-TTY example", code == 2 and bool(questions) == tty and "--setup" in stderr.getvalue()
-                and "python3 llm_mkv_translate.py INPUT --target es --backend openai --model" in stderr.getvalue())
+                and "python3 dragoman.py INPUT --target es --backend openai --model" in stderr.getvalue())
     # Complete the offered setup and continue the same translation run.
     settings=dict(A.VARSAYILAN,backend="agy",model="fake")
     results=[]
@@ -1031,7 +1031,7 @@ kontrol("Share URL stays under limit by dropping stage details first", len(url)<
 with tempfile.TemporaryDirectory() as td:
     td=Path(td);source=td/"source.ass";source.write_text(SYNTHETIC_ASS)
     out=td/"output"
-    argv=["llm-mkv-translate",str(source),"--target","es","--backend","agy","--model","fake","--title","Default features","--episode","1","--output",str(out),"--no-share-prompt"]
+    argv=["dragoman",str(source),"--target","es","--backend","agy","--model","fake","--title","Default features","--episode","1","--output",str(out),"--no-share-prompt"]
     def default_models(model,prompt,schema,timeout,**kwargs):
         if schema==A.OGRENME_SEMA:
             return {"cefr":"B1","confidence":"medium","suitability":"productive_challenge","summary":"Readable with support.","difficulties":[],"evidence":[],"expressions":[]},{}
@@ -1062,14 +1062,14 @@ A.HATA_DOSYASI=None
 
 with tempfile.TemporaryDirectory() as td:
     td=Path(td)
-    argv=["llm-mkv-translate","unused.ass","--target","es","--backend","agy","--model","fake","--output",str(td),"--detach"]
+    argv=["dragoman","unused.ass","--target","es","--backend","agy","--model","fake","--output",str(td),"--detach"]
     with patch.object(sys,"argv",argv), patch.object(A,"ayarlar",return_value=dict(A.VARSAYILAN)), patch.object(A,"interactive",return_value=True), patch.object(A.subprocess,"Popen",return_value=SimpleNamespace(pid=123)) as launch, patch("builtins.input") as ask, contextlib.redirect_stdout(io.StringIO()):
         A.main()
     kontrol("Detached child always suppresses sharing", "--no-share-prompt" in launch.call_args.args[0] and "--detach" not in launch.call_args.args[0] and not ask.called)
 
 with tempfile.TemporaryDirectory() as td:
     td=Path(td);source=td/"source.ass";source.write_text(SYNTHETIC_ASS)
-    argv=["llm-mkv-translate",str(source),"--target","es","--backend","agy","--model","fake","--output",str(td/"out"),"--level-only"]
+    argv=["dragoman",str(source),"--target","es","--backend","agy","--model","fake","--output",str(td/"out"),"--level-only"]
     with patch.object(sys,"argv",argv), patch.object(A,"ayarlar",return_value=dict(A.VARSAYILAN)), patch.object(A,"interactive",return_value=True), patch.object(A.shutil,"which",return_value=None), patch.object(A,"duzey_isle",return_value={"episode":"Movie","cefr":"B1","suitability":"comfortable","report":"local"}), patch("builtins.input") as ask, patch.object(A,"share_report") as share, contextlib.redirect_stdout(io.StringIO()):
         try:
             A.main()
@@ -1124,7 +1124,7 @@ kontrol("License exemption covers the copyright holder only",
         and bool(trace_findings("LICENSE", "Unrelated mention: " + holder))
         and bool(trace_findings("elsewhere.txt", "Copyright (c) 2026 " + holder)))
 kontrol("Repository URL exemption covers exactly the account",
-        not trace_findings("example.md", "https://github.com/" + account + "/llm-mkv-translate/issues/new")
+        not trace_findings("example.md", "https://github.com/" + account + "/dragoman/issues/new")
         and bool(trace_findings("example.md", account))
         and bool(trace_findings("example.md", "https://example.com/" + account + "/repo"))
         and bool(trace_findings("example.md", "https://github.com/" + account + "-extra/repo"))

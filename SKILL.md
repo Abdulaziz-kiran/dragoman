@@ -1,19 +1,19 @@
 ---
-name: llm-mkv-translate
+name: dragoman
 description: Translate and review ASS/SRT subtitles between configured languages with OpenAI-compatible, agy, Codex or Claude Code backends, then deliver verified MKVs.
 ---
 
-# llm-mkv-translate
+# dragoman
 
 The Python CLI manages the pipeline. Start it, monitor its log, and report actual results. Keep full translations out of conversation context.
 
 ```bash
-python3 llm_mkv_translate.py "INPUT" --target es --backend openai --model MODEL --title "Title"
+python3 dragoman.py "INPUT" --target es --backend openai --model MODEL --title "Title"
 ```
 
 A directory processes episodes in order; `--episodes 1,3-5` selects episodes. A movie uses `--movie`. For subtitle-only input, use `--episode N`; no MKV is generated. `--source` defaults to en; `--target` is required. Use ISO 639-1 or 639-2 codes. Unknown languages require an English name. Use a three-letter code for exact track metadata; unknown two-letter codes use `und` metadata with a warning.
 
-Run `python3 llm_mkv_translate.py --setup` in a terminal for first-run setup. It detects the three CLIs and whether `OPENAI_API_KEY` is set, asks for backend/model and, for OpenAI-compatible providers, endpoint and key variable name. It stores no key values, preserves other config keys, and runs the same tiny check as `check_backend.py`. Examples are illustrative; select a model available to your account.
+Run `python3 dragoman.py --setup` in a terminal for first-run setup. It detects the three CLIs and whether `OPENAI_API_KEY` is set, asks for backend/model and, for OpenAI-compatible providers, endpoint and key variable name. It stores no key values, preserves other config keys, and runs the same tiny check as `check_backend.py`. Examples are illustrative; select a model available to your account.
 
 Backend and model must be explicitly configured, through flags or `config.json` beside the script (`--config PATH` overrides it). Missing settings offer setup on a terminal; unattended runs exit with a complete example. Missing tools, authentication failures, unknown models, empty key variables and unreachable endpoints give actionable messages. No real backend calls are needed for `python3 tests.py`. `check_backend.py` makes one small schema-constrained request against the configured backend when deliberately run. OpenAI-compatible endpoints use `base_url` and the environment variable named by `api_key_env`; an empty variable name supports local servers. Never display credentials.
 
@@ -36,7 +36,7 @@ All three are on by default and can also be disabled with their config boolean s
 
 ## Output and recovery
 
-`--output DIR` / `output_dir` defaults to `~/llm-mkv-translate/`, containing `work/`, `library/`, `jobs/` and `watch/`. Files use the target code tag. Existing outputs are archived rather than deleted. Resume with the same command: completed chunks are reused. `--redo` archives a previous job before restarting. Source-unit changes stop a resumed translation to prevent mismatched IDs. Reusing a title with another language pair requires a separate output root, so cached translations and memory cannot cross languages. `--detach` starts an independent process and prints its log path.
+`--output DIR` / `output_dir` defaults to `~/dragoman/`, containing `work/`, `library/`, `jobs/` and `watch/`. Files use the target code tag. Existing outputs are archived rather than deleted. Resume with the same command: completed chunks are reused. `--redo` archives a previous job before restarting. Source-unit changes stop a resumed translation to prevent mismatched IDs. Reusing a title with another language pair requires a separate output root, so cached translations and memory cannot cross languages. `--detach` starts an independent process and prints its log path.
 
 Embedded fonts are checked against actual subtitle characters. Fallbacks from repeatable `--fallback-font PATH` are tried before bundled Source Sans 3. Unsupported scripts produce warnings without an unsuitable font substitution. Decorative Latin folding is restricted to the original decorative-style path. No special RTL layout support is provided.
 

@@ -1,4 +1,6 @@
-# llm-mkv-translate
+# dragoman
+
+*Dragomans were the interpreters of the Ottoman court. They carried more than words: who was speaking to whom, and how. This tool tries to do the same for subtitles.*
 
 Translate subtitles between any two languages with an LLM, review them in a separate pass, and get back a verified MKV. The video and audio are never re-encoded.
 
@@ -34,29 +36,29 @@ Works on anime, TV series and films. Takes the subtitle track inside an MKV, or 
 ## Quick start
 
 ```bash
-git clone https://github.com/Abdulaziz-kiran/llm-mkv-translate.git
-cd llm-mkv-translate
+git clone https://github.com/Abdulaziz-kiran/dragoman.git
+cd dragoman
 python3 tests.py                    # no model calls, costs nothing
-python3 llm_mkv_translate.py --setup   # choose provider and model, runs one tiny test call
+python3 dragoman.py --setup   # choose provider and model, runs one tiny test call
 ```
 
 ```bash
 # Episodes in a folder, English to Spanish
-python3 llm_mkv_translate.py "<folder>" --title "<Show>" --target es --episodes 1-12
+python3 dragoman.py "<folder>" --title "<Show>" --target es --episodes 1-12
 
 # A film
-python3 llm_mkv_translate.py "<video.mkv>" --title "<Film>" --target de --movie
+python3 dragoman.py "<video.mkv>" --title "<Film>" --target de --movie
 
 # Subtitle file only, no MKV
-python3 llm_mkv_translate.py "<file.ass>" --title "<Show>" --target fr --episode 1
+python3 dragoman.py "<file.ass>" --title "<Show>" --target fr --episode 1
 
 # Other source language
-python3 llm_mkv_translate.py "<folder>" --title "<Show>" --source ja --target en
+python3 dragoman.py "<folder>" --title "<Show>" --source ja --target en
 ```
 
-Language codes are ISO 639-1 or 639-2. Run `python3 llm_mkv_translate.py --help` for every option. Common ones: `--season N`, `--source-subtitle FILE`, `--audio-lang CODE`, `--redo`, `--no-human-check`, `--no-level-report`, `--no-content-warnings`, `--no-break-chapters`, `--no-mux`, `--detach`.
+Language codes are ISO 639-1 or 639-2. Run `python3 dragoman.py --help` for every option. Common ones: `--season N`, `--source-subtitle FILE`, `--audio-lang CODE`, `--redo`, `--no-human-check`, `--no-level-report`, `--no-content-warnings`, `--no-break-chapters`, `--no-mux`, `--detach`.
 
-Output goes to `~/llm-mkv-translate/` (`--output` changes it). Finished MKVs are in `watch/`, subtitles in `library/`, the full record of each job in `jobs/`.
+Output goes to `~/dragoman/` (`--output` changes it). Finished MKVs are in `watch/`, subtitles in `library/`, the full record of each job in `jobs/`.
 
 Copy [config.example.json](config.example.json) to `config.json` to change models per role, chunk sizes and paths. The translation style lives in [guide.md](guide.md), and `guides/<language>.md` adds rules for one target language. A [Turkish guide](guides/tr.md) is included; guides for other languages are welcome.
 
