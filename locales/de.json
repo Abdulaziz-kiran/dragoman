@@ -1,0 +1,50 @@
+{
+  "native_name": "Deutsch",
+  "labels": {
+    "warning": "⚠ Mögliche sensible Szene ({reasons}) → {until}",
+    "break": "⏸ Pausenpunkt {n}",
+    "start": "Start",
+    "human_track": "{language} (menschliche Übersetzung)",
+    "level_file": "Sprachniveau",
+    "sensitive_scene": "sensible Szene",
+    "scan_unavailable": "Scan nicht verfügbar (Inhaltssicherheit)",
+    "scan_unavailable_episode": "Inhaltsscan für diese Folge nicht verfügbar"
+  },
+  "report": {
+    "title": "Sprachniveau — {episode}",
+    "confidence": "Zuverlässigkeit",
+    "reading_load": "Leselast: {wpm} Wörter/Min.; Median {median} Zeichen/s, schnellste 10 % {p90}+; schnelle Zeilen {fast} %. {unique} verschiedene Wörter.",
+    "difficulties": "Schwierigkeiten",
+    "expressions": "Nützliche Ausdrücke",
+    "expression_columns": [
+      "Zeit",
+      "Ausdruck",
+      "Art",
+      "Bedeutung",
+      "Nutzen"
+    ],
+    "evidence": "Niveau-Belege",
+    "note": "Ungefähre Inhaltsbewertung; kein persönlicher Test und kein CEFR-Zertifikat.",
+    "profile": "Profil",
+    "season_title": "{title} — Lesebewertung der Ausgangsuntertitel",
+    "season_columns": [
+      "Folge",
+      "CEFR",
+      "Eignung",
+      "Wörter/Min.",
+      "Schnelle Zeilen (Zeichen/s, Top 10 %)",
+      "Zusammenfassung"
+    ],
+    "season_note": "Ungefähre Inhaltsbewertung; Details siehe level.md im jeweiligen Folgenarchiv.",
+    "suitability": {
+      "comfortable": "angenehm anzusehen",
+      "productive_challenge": "anspruchsvoll, aber nützlich",
+      "substantial_support": "deutliche Unterstützung empfohlen"
+    },
+    "confidence_levels": {
+      "low": "niedrig",
+      "medium": "mittel",
+      "high": "hoch"
+    }
+  }
+}

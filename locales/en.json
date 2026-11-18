@@ -1,0 +1,50 @@
+{
+  "native_name": "English",
+  "labels": {
+    "warning": "⚠ Possible sensitive scene ({reasons}) → {until}",
+    "break": "⏸ Break point {n}",
+    "start": "Start",
+    "human_track": "{language} (human translation)",
+    "level_file": "Language level",
+    "sensitive_scene": "sensitive scene",
+    "scan_unavailable": "scan unavailable (content safety)",
+    "scan_unavailable_episode": "content scan unavailable for this episode"
+  },
+  "report": {
+    "title": "Language level — {episode}",
+    "confidence": "confidence",
+    "reading_load": "Reading load: {wpm} words/minute; median {median} columns/second, fastest 10% {p90}+; fast lines {fast}%. {unique} unique words.",
+    "difficulties": "Difficulties",
+    "expressions": "Useful expressions",
+    "expression_columns": [
+      "Time",
+      "Expression",
+      "Kind",
+      "Meaning",
+      "Usefulness"
+    ],
+    "evidence": "Level evidence",
+    "note": "Approximate content assessment; not a personal test or CEFR certificate.",
+    "profile": "Profile",
+    "season_title": "{title} — Source subtitle reading assessment",
+    "season_columns": [
+      "Episode",
+      "CEFR",
+      "Suitability",
+      "Words/minute",
+      "Fast lines (columns/second, top 10%)",
+      "Summary"
+    ],
+    "season_note": "Approximate content assessment; see level.md in each episode job archive.",
+    "suitability": {
+      "comfortable": "comfortable viewing",
+      "productive_challenge": "challenging but useful",
+      "substantial_support": "substantial support recommended"
+    },
+    "confidence_levels": {
+      "low": "low",
+      "medium": "medium",
+      "high": "high"
+    }
+  }
+}

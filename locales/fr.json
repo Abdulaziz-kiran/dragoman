@@ -1,0 +1,50 @@
+{
+  "native_name": "Français",
+  "labels": {
+    "warning": "⚠ Scène sensible possible ({reasons}) → {until}",
+    "break": "⏸ Point de pause {n}",
+    "start": "Début",
+    "human_track": "{language} (traduction humaine)",
+    "level_file": "Niveau de langue",
+    "sensitive_scene": "scène sensible",
+    "scan_unavailable": "analyse indisponible (sécurité du contenu)",
+    "scan_unavailable_episode": "analyse du contenu indisponible pour cet épisode"
+  },
+  "report": {
+    "title": "Niveau de langue — {episode}",
+    "confidence": "fiabilité",
+    "reading_load": "Charge de lecture : {wpm} mots/minute ; médiane {median} caractères/seconde, 10 % les plus rapides {p90}+ ; lignes rapides {fast} %. {unique} mots distincts.",
+    "difficulties": "Difficultés",
+    "expressions": "Expressions utiles",
+    "expression_columns": [
+      "Moment",
+      "Expression",
+      "Type",
+      "Sens",
+      "Utilité"
+    ],
+    "evidence": "Indices du niveau",
+    "note": "Évaluation approximative du contenu ; ne constitue ni un test personnel ni un certificat CEFR.",
+    "profile": "Profil",
+    "season_title": "{title} — Évaluation de lecture des sous-titres source",
+    "season_columns": [
+      "Épisode",
+      "CEFR",
+      "Accessibilité",
+      "Mots/minute",
+      "Lignes rapides (caractères/seconde, top 10 %)",
+      "Résumé"
+    ],
+    "season_note": "Évaluation approximative du contenu ; voir level.md dans l'archive de chaque épisode.",
+    "suitability": {
+      "comfortable": "visionnage confortable",
+      "productive_challenge": "exigeant mais formateur",
+      "substantial_support": "aide importante recommandée"
+    },
+    "confidence_levels": {
+      "low": "faible",
+      "medium": "moyenne",
+      "high": "élevée"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "native_name": "Türkçe",
+  "labels": {
+    "warning": "⚠ Atlanacak sahne olabilir ({reasons}) → {until}",
+    "break": "⏸ Mola noktası {n}",
+    "start": "Başlangıç",
+    "human_track": "{language} (insan çevirisi)",
+    "level_file": "Dil düzeyi",
+    "sensitive_scene": "hassas sahne",
+    "scan_unavailable": "taranamadı (içerik güvenliği)",
+    "scan_unavailable_episode": "bu bölümde içerik taraması yapılamadı"
+  },
+  "report": {
+    "title": "Dil düzeyi — {episode}",
+    "confidence": "güven",
+    "reading_load": "Okuma yükü: dakikada {wpm} kelime; ortanca saniyede {median} harf, en hızlı %10 {p90}+; hızlı satır %{fast}. {unique} farklı kelime.",
+    "difficulties": "Zorluklar",
+    "expressions": "Öğrenmeye değer ifadeler",
+    "expression_columns": ["Zaman", "İfade", "Tür", "Anlam", "Neden faydalı"],
+    "evidence": "Düzey kanıtları",
+    "note": "Yaklaşık içerik değerlendirmesidir; kişisel sınav ya da CEFR belgesi değildir.",
+    "profile": "Profil",
+    "season_title": "{title} — Kaynak altyazının okunabilirlik değerlendirmesi",
+    "season_columns": ["Bölüm", "CEFR", "Uygunluk", "Kelime/dakika", "Hızlı satırlar (harf/saniye, en hızlı %10)", "Özet"],
+    "season_note": "Yaklaşık içerik değerlendirmesidir; ayrıntı her bölümün iş arşivindeki level.md dosyasında.",
+    "suitability": {
+      "comfortable": "rahat izlenir",
+      "productive_challenge": "zorlayıcı ama faydalı",
+      "substantial_support": "yoğun destek gerekir"
+    },
+    "confidence_levels": {"low": "düşük", "medium": "orta", "high": "yüksek"}
+  }
+}

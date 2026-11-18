@@ -1,0 +1,50 @@
+{
+  "native_name": "日本語",
+  "labels": {
+    "warning": "⚠ 注意が必要なシーン ({reasons}) → {until}",
+    "break": "⏸ 休憩ポイント {n}",
+    "start": "開始",
+    "human_track": "{language}（人手翻訳）",
+    "level_file": "語学レベル",
+    "sensitive_scene": "注意シーン",
+    "scan_unavailable": "スキャン不可（コンテンツ安全性）",
+    "scan_unavailable_episode": "このエピソードはコンテンツスキャンを利用できません"
+  },
+  "report": {
+    "title": "語学レベル — {episode}",
+    "confidence": "信頼度",
+    "reading_load": "読み取り負荷: 毎分{wpm}語、中央値 {median}文字/秒、上位10% {p90}+、速い行 {fast}%。異なり語数 {unique}語。",
+    "difficulties": "難所",
+    "expressions": "役立つ表現",
+    "expression_columns": [
+      "時間",
+      "表現",
+      "種類",
+      "意味",
+      "有用性"
+    ],
+    "evidence": "レベル判定の根拠",
+    "note": "コンテンツの概算評価であり、個人の語学テストやCEFR認定証ではありません。",
+    "profile": "プロファイル",
+    "season_title": "{title} — 原語字幕の読解負荷評価",
+    "season_columns": [
+      "エピソード",
+      "CEFR",
+      "視聴適性",
+      "語数/分",
+      "速い行（文字/秒、上位10%）",
+      "要約"
+    ],
+    "season_note": "コンテンツの概算評価です。詳細は各エピソードのアーカイブ内の level.md を参照してください。",
+    "suitability": {
+      "comfortable": "無理なく視聴可能",
+      "productive_challenge": "やや歯ごたえがあるが有益",
+      "substantial_support": "十分な補助を推奨"
+    },
+    "confidence_levels": {
+      "low": "低",
+      "medium": "中",
+      "high": "高"
+    }
+  }
+}

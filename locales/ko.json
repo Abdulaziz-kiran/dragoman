@@ -1,0 +1,50 @@
+{
+  "native_name": "한국어",
+  "labels": {
+    "warning": "⚠ 민감한 장면 가능 ({reasons}) → {until}",
+    "break": "⏸ 휴식 지점 {n}",
+    "start": "시작",
+    "human_track": "{language} (사람 번역)",
+    "level_file": "언어 수준",
+    "sensitive_scene": "민감한 장면",
+    "scan_unavailable": "스캔 불가 (콘텐츠 안전)",
+    "scan_unavailable_episode": "이 에피소드는 콘텐츠 스캔을 할 수 없습니다"
+  },
+  "report": {
+    "title": "언어 수준 — {episode}",
+    "confidence": "신뢰도",
+    "reading_load": "읽기 부담: 분당 {wpm}단어, 중앙값 초당 {median}자, 상위 10% {p90}+, 빠른 대사 {fast}%. 고유 단어 {unique}개.",
+    "difficulties": "어려운 점",
+    "expressions": "유용한 표현",
+    "expression_columns": [
+      "시간",
+      "표현",
+      "유형",
+      "뜻",
+      "유용성"
+    ],
+    "evidence": "수준 근거",
+    "note": "대략적인 콘텐츠 평가이며 개인 시험이나 CEFR 인증서가 아닙니다.",
+    "profile": "프로필",
+    "season_title": "{title} — 원본 자막 읽기 난이도 평가",
+    "season_columns": [
+      "에피소드",
+      "CEFR",
+      "적합도",
+      "단어/분",
+      "빠른 대사 (자/초, 상위 10%)",
+      "요약"
+    ],
+    "season_note": "대략적인 콘텐츠 평가입니다. 각 에피소드 작업 보관함의 level.md를 참고하세요.",
+    "suitability": {
+      "comfortable": "편하게 시청 가능",
+      "productive_challenge": "도전적이지만 유익함",
+      "substantial_support": "상당한 보조 권장"
+    },
+    "confidence_levels": {
+      "low": "낮음",
+      "medium": "보통",
+      "high": "높음"
+    }
+  }
+}

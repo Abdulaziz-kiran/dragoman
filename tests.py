@@ -115,9 +115,11 @@ with tempfile.TemporaryDirectory() as td:
     try:
         ayar = {"model_level": "m", "learner_profile": "B2", "timeout_seconds": 1, "jobs_dir": td / "is", "library_dir": td / "ass"}
         (td / "is" / "Seri" / "S01E01").mkdir(parents=True)
+        A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "it")  # Italian has no built-in pack: English report text
         r = A.ogrenme_raporu(ayar, bir, td / "is" / "Seri" / "S01E01", "Seri S01E01")
     finally:
         A.model_cagir = eski_cagir
+        A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "tr")
     kontrol('Invented learning quotes are rejected', len(r["expressions"]) == 1 and r["rejected_quotes"] == 1)
     md = (td / "is" / "Seri" / "S01E01" / "level.md").read_text(encoding="utf-8")
     kontrol('English level report includes timestamps and expressions', "0:00:04" in md and "care about" in md and "challenging but useful" in md)
@@ -214,7 +216,7 @@ with tempfile.TemporaryDirectory() as td:
     kontrol('Content scan splits safety-blocked ranges',
             t["status"] == "partial" and len(t["unscanned"]) == 1 and t["scenes"][0]["first_id"] == "150")
     ol, kay = A.uyari_olaylari(bir, t["scenes"] + t["unscanned"], ["layer", "start", "end", "style", "name", "marginl", "marginr", "marginv", "effect", "text"])
-    kontrol('Unscanned ranges receive visible warnings', len(ol) == 2 and any("scan unavailable" in o for o in ol))
+    kontrol('Unscanned ranges receive visible warnings', len(ol) == 2 and any(A.LABELS["scan_unavailable"] in o for o in ol))
 eski_run = A.subprocess.Popen
 class SahteP2:
     pid = 999999
@@ -799,7 +801,7 @@ for preferred_audio in (None,"ja"):
             return SimpleNamespace(stdout="",returncode=0)
         with patch.object(A,"ffprobe",side_effect=[streams,new_streams]), patch.object(A.subprocess,"run",side_effect=fake_media), patch.object(A,"akis_hash",return_value=["v,SHA256=valid","a,SHA256=valid"]), patch.object(A,"altyazi_ic_ice",return_value=True):
             result=A.paketle(video,subtitle,output,preferred_audio,ek=[(human,"German (human translation)")])
-        kontrol("Non-Turkish mux metadata", "language=deu" in mux_cmd and "title=German" in mux_cmd and "title=German (human translation)" in mux_cmd)
+        kontrol("Non-Turkish mux metadata (track title in the native name)", "language=deu" in mux_cmd and "title=Deutsch" in mux_cmd and "title=German (human translation)" in mux_cmd)
         kontrol("AV1 dual-input and packet verification retained", result["av1_dual_input"] and result["identical_av"] and "+noparse+nofillin" in mux_cmd)
         kontrol("Audio dispositions preserved unless requested", any(x.startswith("-disposition:a") for x in mux_cmd) == bool(preferred_audio))
         kontrol("Previous MKV delivery archived", any(f.read_bytes()==b"previous delivery" for f in (td/"previous").iterdir()))
@@ -861,12 +863,12 @@ for succeed in (True, False):
         code=check_backend.main()
     kontrol("Backend diagnostic prints a truthful result", code == (0 if succeed else 1) and stdout.getvalue().startswith("OK" if succeed else "FAIL") and call.call_count == 1 and call.call_args.kwargs["deneme"] == 1)
 
-# Language addenda retain every required example verbatim.
-original_guide = Path(__file__).parent / "_yerel" / "rehber-kaynak.md"
-if original_guide.exists():
-    original = original_guide.read_text()
-    table = original[original.index("| Kaynak |"):original.index("## Biçim")]
-    kontrol("Turkish counterexample table preserved exactly", table in (Path(__file__).parent / "guides" / "tr.md").read_text())
+# The Turkish addendum keeps every counterexample of the original guide (source and wrong version verbatim).
+_tr_guide = (Path(__file__).parent / "guides" / "tr.md").read_text(encoding="utf-8")
+kontrol("Turkish counterexample table preserved", all(row in _tr_guide for row in (
+    "| Sit up. | Yat. |", "| Are you two in a spat? | Limoni mi olmuşsunuz? |", "| ...and I want you to do all you can. | (cümle düşmüş) |",
+    "| Good luck, Mr. Detective. | İyi şanslar, Bay Dr. Dedektif. |", "| It's a letter from your sister? | Kız kardeşimden mektup mu? |",
+    "| (Japonca şarkı satırı よ) | yo |")))
 
 
 # Task 2: safe interactive setup and actionable errors.
@@ -1353,9 +1355,12 @@ with tempfile.TemporaryDirectory() as td:
 
 A.configure(dict(A.VARSAYILAN, backend="agy", model="fake", labels={"warning": "W {reasons} {until}"}), "en", "tr")
 _ev, _ = A.uyari_olaylari([{"id": "1", "start": 60.0, "end": 62.0}], [{"first_id": "1", "last_id": "1", "reason": "r"}], ["start", "end", "style", "text"])
-kontrol("Viewer-facing labels are configurable per key", _ev and _ev[0].endswith(",W r 1:07") and A.LABELS["break"] == A.LABELS_DEFAULT["break"])
+kontrol("Viewer-facing labels are configurable per key", _ev and _ev[0].endswith(",W r 1:07") and A.LABELS["break"] == A.locale("tr")["labels"]["break"])
 A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "tr")
-kontrol("Labels return to defaults on reconfigure", A.LABELS == A.LABELS_DEFAULT)
+kontrol("Labels return to the target pack on reconfigure", A.LABELS == {**A.LABELS_DEFAULT, **A.locale("tr")["labels"]})
+A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "it")
+kontrol("A target without a pack uses English labels", A.LABELS == A.LABELS_DEFAULT and A.REPORT == A.REPORT_DEFAULT)
+A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "tr")
 
 with tempfile.TemporaryDirectory() as td:
     prompts = []
@@ -1393,6 +1398,137 @@ with tempfile.TemporaryDirectory() as td:
         A.bolum_baglami(dict(A.VARSAYILAN, model_series="m", context_notes="NOTE-XYZ"), _cass, _cb, "", {}, "", Path(td))
     kontrol("Context notes are appended to the episode-context task", "NOTE-XYZ" in ctx[0] and ctx[0].index("NOTE-XYZ") < ctx[0].index("---- EPISODE"))
 
+# Built-in language packs: the same keys and placeholders as English, and a guide addendum for each.
+import json as _jl, re as _rl, os as _os
+_root = Path(__file__).resolve().parent
+_en = _jl.loads((_root / "locales" / "en.json").read_text(encoding="utf-8"))
+
+
+def _shape(a, b):
+    if isinstance(a, dict):
+        return isinstance(b, dict) and set(a) == set(b) and all(_shape(a[k], b[k]) for k in a)
+    if isinstance(a, list):
+        return isinstance(b, list) and len(a) == len(b) and all(isinstance(x, str) and x.strip() for x in b)
+    return isinstance(b, str) and bool(b.strip()) and sorted(_rl.findall(r"\{\w+\}", a)) == sorted(_rl.findall(r"\{\w+\}", b))
+
+
+_packs = A.builtin_languages()
+kontrol("Built-in languages include en, tr, ru, es, de, fr, pt, ja, zh, ko, ar", set("en tr ru es de fr pt ja zh ko ar".split()) <= set(_packs))
+_bad = [c for c in _packs if not _shape(_en, _jl.loads((_root / "locales" / f"{c}.json").read_text(encoding="utf-8")))]
+kontrol(f"Every language pack has the English keys and placeholders {_bad or ''}", not _bad)
+kontrol("Every language pack has a guide addendum and a known code", all((_root / "guides" / f"{c}.md").exists() and c in A.LANGUAGES for c in _packs))
+kontrol("English pack equals the built-in defaults", _en["labels"] == A.LABELS_DEFAULT and _en["report"] == A.REPORT_DEFAULT)
+_fmt_ok = True
+for _c in _packs:
+    A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", _c)
+    try:
+        _w = A.LABELS["warning"].format(reasons="x", until="1:00"); A.LABELS["break"].format(n=2)
+        A.LABELS["human_track"].format(language="L"); A.REPORT["title"].format(episode="E")
+        _fmt_ok &= _w.startswith("⚠") and A.LABELS["break"].startswith("⏸") and A.TARGET["display"] == A.locale(_c)["native_name"]
+    except (KeyError, IndexError, ValueError):
+        _fmt_ok = False
+kontrol("Every pack's labels format and the track title is the native language name", _fmt_ok)
+_a = dict(A.VARSAYILAN, backend="agy", model="fake"); A.configure(_a, "en", "tr")
+kontrol("Turkish target: Turkish labels, warning reasons and report language default to Turkish",
+        A.TARGET["display"] == "Türkçe" and A.LABELS["break"] == "⏸ Mola noktası {n}" and _a["warning_language"] == _a["report_language"] == "Turkish")
+_a = dict(A.VARSAYILAN, backend="agy", model="fake", warning_language="English", labels={"level_file": "Level"}); A.configure(_a, "en", "tr", target_name="Tr")
+kontrol("Config wins over the pack (explicit language, single label, --target-name)",
+        _a["warning_language"] == "English" and _a["report_language"] == "Turkish" and A.LABELS["level_file"] == "Level"
+        and A.LABELS["start"] == "Başlangıç" and A.TARGET["display"] == "Tr")
+_a = dict(A.VARSAYILAN, backend="agy", model="fake"); A.configure(_a, "en", "tr"); A.configure(_a, "en", "de")
+_b = dict(A.VARSAYILAN, backend="agy", model="fake", report_language="Klingon"); A.configure(_b, "en", "tr"); A.configure(_b, "en", "de")
+kontrol("Reconfiguring the same dict recomputes filled-in languages but keeps explicit ones",
+        _a["warning_language"] == _a["report_language"] == "German" and _b["report_language"] == "Klingon" and _b["warning_language"] == "German")
+kontrol("Empty or blank guide_extra entries are ignored", A.guide_extras({"guide_extra": ""}) == [] and A.guide_extras({"guide_extra": ["", " x.md "]}) == ["x.md"])
+kontrol("Line wrap never starts a line with French closing punctuation or ends one after «",
+        all(not l.startswith(tuple("?!:;»")) and not l.rstrip().endswith("«")
+            for t in ("Tu viens avec nous ce soir ou pas du tout ? Réponds", "Il a dit « je reviendrai demain matin » et il est parti")
+            for l in A.satir_kir(t, 30).split("\\N")))
+A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "tr")
+_md = A.ogrenme_md({"episode": "S01E01", "cefr": "B2", "suitability": "productive_challenge", "confidence": "high", "summary": "s",
+                    "difficulties": ["d"], "expressions": [], "evidence": [], "note": "n", "profile": "p",
+                    "measurements": {"words_per_minute": 90, "cps_median": 12, "cps_p90": 18, "fast_line_percent": 5, "unique_words": 300}}, [])
+kontrol("Level report text follows the target pack", "zorlayıcı ama faydalı" in _md and "Öğrenmeye değer ifadeler" in _md and "dakikada 90 kelime" in _md
+        and "güven: yüksek" in _md)
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    (td / "jobs" / "Seri" / "S01E01").mkdir(parents=True)
+    (td / "jobs" / "Seri" / "S01E01" / "level.json").write_text(_jl.dumps({"cefr": "B1", "suitability": "comfortable", "summary": "o"}), encoding="utf-8")
+    _tab = A.ogrenme_ozeti({"jobs_dir": td / "jobs", "library_dir": td / "lib"}, "Seri", 1)
+    kontrol("Season level table follows the target pack", _tab.name == "Dil düzeyi.md" and "| S01E01 | B1 | rahat izlenir |" in _tab.read_text(encoding="utf-8")
+            and "Uygunluk" in _tab.read_text(encoding="utf-8"))
+    (td / "ek.md").write_text("EXTRA-RULE-42", encoding="utf-8")
+    (td / "c.json").write_text(_jl.dumps({"backend": "agy", "model": "m", "target": "tr", "guide_extra": "ek.md"}), encoding="utf-8")
+    _s = A.ayarlar(str(td / "c.json")); A.configure(_s, "en", "tr")
+    _g = A.rehber_metni(_s)
+    kontrol("Guide = general guide, then target addendum, then the user's extra file (relative to config)",
+            _s["guide_extra"] == [str((td / "ek.md").resolve())] and _g.index("Translator and reviewer guide") < _g.index("Türkçe hedef dil eki") < _g.index("EXTRA-RULE-42"))
+
+    class _Stop(Exception):
+        pass
+    with patch.object(sys, "argv", ["dragoman.py", "x.ass", "--config", str(td / "c.json")]), patch.object(A, "configure", side_effect=_Stop) as _c:
+        try:
+            A.main()
+        except _Stop:
+            pass
+    kontrol("Config 'target' replaces --target; source defaults to en", _c.call_args is not None and _c.call_args.args[1:3] == ("en", "tr"))
+A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "tr")
+_out = io.StringIO()
+with patch.object(sys, "argv", ["dragoman.py", "--languages"]), contextlib.redirect_stdout(_out):
+    A.main()
+kontrol("--languages lists the built-in packs", "tr  Turkish (Türkçe)" in _out.getvalue() and len(_out.getvalue().splitlines()) == len(_packs))
+
+
+# Golden file: a synthetic episode with a deterministic fake model must give exactly the stored output (line wrapping,
+# duration extension, tags, styles; karaoke, romaji and drawings untouched). DRAGOMAN_SAMPLES=<folder> runs the same
+# check on local, unshipped <name>.en.ass files against <folder>/expected/<name>.final.ass.
+def _golden(src: Path) -> bytes:
+    a = dict(A.VARSAYILAN, backend="agy", model="fake"); A.configure(a, "en", "tr"); a.update(A.BACKEND_CONFIG)
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        a.update({k: td / k for k in ("work_dir", "jobs_dir", "library_dir", "watch")})
+        a.update(content_warnings=False, level_report=False, break_chapters=False)
+        is_dir = a["work_dir"] / "Sample" / "S01E01"; is_dir.mkdir(parents=True)
+        seri = is_dir.parent / "series.md"; seri.write_text("series", encoding="utf-8")
+
+        def fake(model, prompt, schema, timeout, **k):
+            if schema is A.BAGLAM_SEMA:
+                return {x: [] for x in A.BAGLAM_SEMA["required"]}, {}
+            if schema is A.CEVIRI_SEMA:
+                part = prompt.split("TRANSLATE:\n")[1].split("\n\n")[0]
+                return {"translations": {m.group(1): m.group(2) + " ve böylece devam ediyoruz"
+                                         for m in _rl.finditer(r"^(\d+) \[[^\]]*\]: (.*)$", part, _rl.M)}}, {}
+            if schema is A.INCELEME_SEMA:
+                ids = _rl.findall(r"^(\d+) \[", prompt, _rl.M)
+                return {"corrections": [], "last_reviewed_id": ids[-1] if ids else ""}, {}
+            raise AssertionError("unexpected call")
+        with patch.object(A, "model_cagir", side_effect=fake), patch.object(A, "HATA_DOSYASI", None), patch.object(A, "log"):
+            A.bolum_isle(a, "Sample", 1, 1, None, src, "", seri, False, None)
+        A.RECEIPT[:] = [None, ""]; A.RUN_FILE[0] = None
+        return (is_dir / "final.ass").read_bytes()
+
+
+def _identity(src: Path) -> bool:
+    text = src.read_text(encoding="utf-8")
+    ass = A.Ass(text)
+    units, events = A.birimleri_cikar(ass)
+    by_id = {u["id"]: u for u in units}
+    new = {k: A.olaya_yerlestir(by_id[e["id"]]["text"], e, by_id[e["id"]]["kind"], 10**6)[0] for k, e in events.items() if not e["merged"]}
+    return ass.yaz(new, [], None) == text.replace("\r\n", "\n") and not any(A.CJK.search(u["text"]) for u in units)
+
+
+_fx = _root / "fixtures"
+kontrol("Golden synthetic episode: final.ass byte-identical to the stored output", _golden(_fx / "golden.en.ass") == (_fx / "golden.tr.expected.ass").read_bytes())
+kontrol("Golden synthetic episode: identity translation rewrites the file unchanged, no CJK/romaji units", _identity(_fx / "golden.en.ass"))
+if _os.environ.get("DRAGOMAN_SAMPLES"):
+    _dir = Path(_os.environ["DRAGOMAN_SAMPLES"]).expanduser()
+    _pairs = [(s_, _dir / "expected" / (s_.name[:-len(".en.ass")] + ".final.ass")) for s_ in sorted(_dir.glob("*.en.ass"))]
+    kontrol(f"Local samples found ({len(_pairs)})", bool(_pairs) and all(e.exists() for _, e in _pairs))
+    for s_, e in _pairs:
+        kontrol(f"Local sample {s_.name}: final.ass byte-identical", e.exists() and _golden(s_) == e.read_bytes())
+        kontrol(f"Local sample {s_.name}: identity rewrite unchanged, no CJK/romaji units", _identity(s_))
+A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "tr")
+
 # Scan every shipped text artifact, excluding documented local-only coordination files.
 root=Path(__file__).resolve().parent
 local_names={"CLAUDE.md","DURUM.md","KARARLAR.md"}
@@ -1407,7 +1543,8 @@ def trace_findings(relative, text):
     # Replace only the account component, leaving repository names and the rest of each URL scanned.
     repo_url = r"((?:https?://github\.com/|ssh://git@github\.com/|git@github\.com:))" + re.escape(account) + r"(?=/[A-Za-z0-9_.-]+(?:[/?#\s)'\"<>]|$))"
     text = re.sub(repo_url, lambda m: m.group(1) + "<repository-account>", text)
-    checks = needles if relative == "guides/tr.md" else needles + ui_words
+    # Target-language packs and addenda are meant to contain their language.
+    checks = needles if relative.startswith(("guides/", "locales/")) else needles + ui_words
     return [needle for needle in checks if needle.casefold() in text.casefold()]
 
 account = "Abdul" + "aziz-kiran"

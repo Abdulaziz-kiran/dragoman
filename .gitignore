@@ -8,5 +8,6 @@ config.json
 *.mkv
 *.mp4
 *.ass
+!fixtures/*.ass
 *.srt
 *.vtt

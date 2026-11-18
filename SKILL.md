@@ -11,7 +11,7 @@ The Python CLI manages the pipeline. Start it, monitor its log, and report actua
 python3 dragoman.py "INPUT" --target es --backend openai --model MODEL --title "Title"
 ```
 
-A directory processes episodes in order; `--episodes 1,3-5` selects episodes. A movie uses `--movie`. For subtitle-only input, use `--episode N`; no MKV is generated. `--source` defaults to en; `--target` is required. Use ISO 639-1 or 639-2 codes. Unknown languages require an English name. Use a three-letter code for exact track metadata; unknown two-letter codes use `und` metadata with a warning.
+A directory processes episodes in order; `--episodes 1,3-5` selects episodes. A movie uses `--movie`. For subtitle-only input, use `--episode N`; no MKV is generated. `--source` defaults to en; `--target` is required unless config sets `target` (and optionally `source`). Use ISO 639-1 or 639-2 codes. Unknown languages require an English name. Use a three-letter code for exact track metadata; unknown two-letter codes use `und` metadata with a warning.
 
 Run `python3 dragoman.py --setup` in a terminal for first-run setup. It detects the three CLIs and whether `OPENAI_API_KEY` is set, asks for backend/model and, for OpenAI-compatible providers, endpoint and key variable name. It stores no key values, preserves other config keys, and runs the same tiny check as `check_backend.py`. Examples are illustrative; select a model available to your account.
 
@@ -24,13 +24,13 @@ Backend and model must be explicitly configured, through flags or `config.json` 
 3. Read available episodes into `series.md`. `--series-source DIR` adds earlier context. Extract episode terms, directional register, voices, recurring expressions and ambiguities; reuse series memory. Translate scene-aware chunks in parallel (each line shows its on-screen duration), then independently review with trap lines. Each correction passes a meaning gate (`model_gate`, default the review model; `meaning_gate: false` disables it); a gate failure stops the episode so no unchecked correction is delivered. Dialogue too long to read at `target_cps` is extended by at most `max_extension_seconds`, never into the next line. Preserve ASS tags, styles and timing; drawings and karaoke stay untouched. Script filtering depends on the source/target pair.
 4. Deliver ASS and optionally MKV. Verify duration, subtitle event count, presence of video, audio/video packet SHA-256 and subtitle interleaving; retain AV1 packet safeguards. Preserve existing audio default flags unless `--audio-lang CODE` is requested.
 
-Guide: `guide.md`, plus `guides/<target-code>.md` if present, or one complete file named by `guide` in config. Config can override role models with `model_translate`, `model_review`, `model_gate`, `model_series`, `model_warnings`, and `model_level`. Review uses a separate call; a different model is optional.
+Guide: `guide.md`, plus `guides/<target-code>.md` if present, or one complete file named by `guide` in config; files in `guide_extra` (relative to the config file) follow, for the user's own audience and taste rules. Built-in target languages (`python3 dragoman.py --languages`): en, tr, ru, es, de, fr, pt, ja, zh, ko, ar; each also has `locales/<code>.json` for on-screen text (warning overlay, break chapters, track title, level report). `report_language` and `warning_language` default to the target language; config `labels` override single keys. Config can override role models with `model_translate`, `model_review`, `model_gate`, `model_series`, `model_warnings`, and `model_level`. Review uses a separate call; a different model is optional.
 
 ## Reports and overlays
 
 All three are on by default and can also be disabled with their config boolean set to false:
 
-- `--no-level-report` disables the report (written in `report_language`, default English) assessing source-subtitle difficulty, CEFR, reading load and source-verified useful expressions, using configurable `learner_profile` (default: intermediate learner of the source language). `--level-only` assesses without translating.
+- `--no-level-report` disables the report (written in `report_language`, default the target language) assessing source-subtitle difficulty, CEFR, reading load and source-verified useful expressions, using configurable `learner_profile` (default: intermediate learner of the source language). `--level-only` assesses without translating.
 - `--no-content-warnings` disables dialogue-based sensitive-scene overlays (reasons in `warning_language`, overlay text from `labels.warning`). These are estimates, not visual scene detection; unavailable scan ranges are reported and warned about.
 - `--no-break-chapters` disables natural viewing breaks as MKV chapters; existing chapters survive. No video cutting.
 

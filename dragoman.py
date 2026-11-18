@@ -23,7 +23,7 @@ import threading
 import time
 from pathlib import Path
 
-SURUM = "1.2.0"
+SURUM = "1.3.0"
 KOK = Path(__file__).resolve().parent
 EV = Path.home()
 VARSAYILAN = {
@@ -41,14 +41,35 @@ VARSAYILAN = {
     "target_cps": 17, "max_extension_seconds": 1.5,
     # Off by default: only a streaming-platform target track (title or neutral title + filename tag) skips translation.
     "human_scoring": False,
-    "audio_lang": None, "guide": None,
-    "labels": {}, "report_language": "English", "warning_language": "English",
+    "audio_lang": None, "guide": None, "guide_extra": [],
+    # Default language pair when --source/--target are omitted on the command line.
+    "source": None, "target": None,
+    # None: the target language (overlay reasons and level reports are read by target-language viewers).
+    "labels": {}, "report_language": None, "warning_language": None,
     "context_notes": "",  # extra instructions appended to the episode-context task (for example memory-label rules)
 }
 # Viewer-facing labels; config "labels" overrides single keys (for example in the target language).
+# Built-in target-language packs live in locales/<code>.json; config "labels" still wins over them.
 LABELS_DEFAULT = {"warning": "⚠ Possible sensitive scene ({reasons}) → {until}", "break": "⏸ Break point {n}", "start": "Start",
-                  "human_track": "{language} (human translation)", "level_file": "Language level"}
+                  "human_track": "{language} (human translation)", "level_file": "Language level",
+                  "sensitive_scene": "sensitive scene", "scan_unavailable": "scan unavailable (content safety)",
+                  "scan_unavailable_episode": "content scan unavailable for this episode"}
 LABELS = dict(LABELS_DEFAULT)
+# Level report text (level.md and the season table), translated by locale packs.
+REPORT_DEFAULT = {
+    "title": "Language level — {episode}", "confidence": "confidence",
+    "reading_load": "Reading load: {wpm} words/minute; median {median} columns/second, fastest 10% {p90}+; fast lines {fast}%. {unique} unique words.",
+    "difficulties": "Difficulties", "expressions": "Useful expressions",
+    "expression_columns": ["Time", "Expression", "Kind", "Meaning", "Usefulness"],
+    "evidence": "Level evidence", "note": "Approximate content assessment; not a personal test or CEFR certificate.",
+    "profile": "Profile", "season_title": "{title} — Source subtitle reading assessment",
+    "season_columns": ["Episode", "CEFR", "Suitability", "Words/minute", "Fast lines (columns/second, top 10%)", "Summary"],
+    "season_note": "Approximate content assessment; see level.md in each episode job archive.",
+    "suitability": {"comfortable": "comfortable viewing", "productive_challenge": "challenging but useful",
+                    "substantial_support": "substantial support recommended"},
+    "confidence_levels": {"low": "low", "medium": "medium", "high": "high"},
+}
+REPORT = dict(REPORT_DEFAULT)
 ROLES = ("translate", "review", "series", "warnings", "level", "gate")
 
 # Common ISO 639-1 codes, ISO 639-2/T, optional ISO 639-2/B, and English names.
@@ -75,6 +96,16 @@ for _row in (
     _codes = (_two, *_three.split("/"))
     for _code in _codes:
         LANGUAGES[_code] = {"code": _two, "iso3": _codes[1], "name": _name, "codes": _codes}
+
+
+def locale(code: str) -> dict:
+    """Built-in pack for a target language (labels, report text, native name); empty if none ships."""
+    path = KOK / "locales" / f"{code}.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
+def builtin_languages() -> list[str]:
+    return sorted(p.stem for p in (KOK / "locales").glob("*.json"))
 
 
 def language(code: str, name: str | None = None) -> dict:
@@ -127,6 +158,12 @@ def log(mesaj: str) -> None:
         print(f"[{dt.datetime.now():%H:%M:%S}] {mesaj}", flush=True)
 
 
+def guide_extras(a: dict) -> list[str]:
+    """"guide_extra" as a list of non-empty paths (a single string is accepted)."""
+    ekler = [a["guide_extra"]] if isinstance(a.get("guide_extra"), str) else list(a.get("guide_extra") or [])
+    return [e.strip() for e in ekler if isinstance(e, str) and e.strip()]
+
+
 def ayarlar(config: str | None = None) -> dict:
     a = dict(VARSAYILAN)
     dosya = Path(config).expanduser() if config else KOK / "config.json"
@@ -134,6 +171,7 @@ def ayarlar(config: str | None = None) -> dict:
         a.update(json.loads(dosya.read_text(encoding="utf-8")))
         if a.get("guide") and not Path(a["guide"]).expanduser().is_absolute():  # relative to the config file
             a["guide"] = str(dosya.resolve().parent / a["guide"])
+        a["guide_extra"] = [str(e if Path(e).expanduser().is_absolute() else dosya.resolve().parent / e) for e in guide_extras(a)]
     root = Path(a["output_dir"]).expanduser()
     # Explicit folder settings override the output_dir layout (watch_dir sets the watch folder).
     for k, folder, key in (("work_dir", "work", "work_dir"), ("library_dir", "library", "library_dir"),
@@ -143,8 +181,19 @@ def ayarlar(config: str | None = None) -> dict:
 
 
 def configure(a: dict, source: str, target: str, source_name=None, target_name=None) -> None:
-    global SOURCE, TARGET, BACKEND_CONFIG, FALLBACK_PATHS, LABELS
+    global SOURCE, TARGET, BACKEND_CONFIG, FALLBACK_PATHS, LABELS, REPORT
     SOURCE, TARGET = language(source, source_name), language(target, target_name)
+    pack = locale(TARGET["code"])
+    # Viewer-facing name (MKV track title, human track label): explicit --target-name, else the pack's native name.
+    TARGET["display"] = target_name or pack.get("native_name") or TARGET["name"]
+    english = LANGUAGES.get(TARGET["code"], {}).get("name") or TARGET["name"]
+    # Filled-in defaults are remembered so that reconfiguring the same dict for another target recomputes them.
+    derived = set(a.get("_derived_languages") or ())
+    for key in ("report_language", "warning_language"):
+        if not a.get(key) or key in derived:
+            a[key] = english
+            derived.add(key)
+    a["_derived_languages"] = sorted(derived)
     if TARGET["iso3"] == "und":
         log("WARNING: unknown two-letter target has no ISO 639-2 mapping; track metadata will use und. Supply a three-letter code for an exact tag.")
     if a.get("backend") not in ("openai", "agy", "codex", "claude-code") or not a.get("model"):
@@ -152,7 +201,10 @@ def configure(a: dict, source: str, target: str, source_name=None, target_name=N
     for role in ROLES:
         a["model_" + role] = a.get("model_" + role) or (a.get("model_review") if role == "gate" else None) or a["model"]
     BACKEND_CONFIG = dict(a)
-    LABELS = {**LABELS_DEFAULT, **(a.get("labels") or {})}
+    LABELS = {**LABELS_DEFAULT, **(pack.get("labels") or {}), **(a.get("labels") or {})}
+    REPORT = {**REPORT_DEFAULT, **(pack.get("report") or {})}
+    for key in ("suitability", "confidence_levels"):
+        REPORT[key] = {**REPORT_DEFAULT[key], **((pack.get("report") or {}).get(key) or {})}
     FALLBACK_PATHS = [Path(f).expanduser() for f in a.get("fallback_fonts", [])]
 
 
@@ -648,7 +700,9 @@ def satir_kir(metin: str, sinir: int) -> str:
         metin = " ".join(line.strip() for line in satirlar)
     if columns(metin) <= sinir:
         return metin
-    bosluklar = [m.start() for m in re.finditer(" ", metin)]
+    # A space before closing punctuation (French " ?", " !", " :", " ;", " »") or after "«" is not a break point.
+    bosluklar = [m.start() for m in re.finditer(" ", metin)
+                 if metin[m.start() + 1:m.start() + 2] not in tuple("?!:;»") and metin[m.start() - 1:m.start()] != "«"]
     orta = columns(metin) / 2
     if bosluklar:
         i = min(bosluklar, key=lambda i: abs(columns(metin[:i]) - orta) - (6 if metin[i-1] in ",.;:!?…" else 0))
@@ -1000,7 +1054,7 @@ def paketle(video: Path, ass: Path, cikti: Path, ses_tercih: str | None, yedek_f
                   f"-metadata:s:t:{ek_sayisi + j}", f"filename={f.name}"]
 
     k += ["-c", "copy", "-max_interleave_delta", "0", "-disposition:s", "0", "-disposition:s:0", "default",
-          "-metadata:s:s:0", f"language={TARGET['iso3']}", "-metadata:s:s:0", f"title={TARGET['name']}"]
+          "-metadata:s:s:0", f"language={TARGET['iso3']}", "-metadata:s:s:0", f"title={TARGET.get('display', TARGET['name'])}"]
     for j, (_, baslik) in enumerate(ek, 1):
         k += [f"-metadata:s:s:{j}", f"language={TARGET['iso3']}", f"-metadata:s:s:{j}", f"title={baslik}"]
     if ses_tercih:
@@ -1587,7 +1641,7 @@ def sansur_tara(a, birimler, is_dir) -> dict:
                 orta = (i + j) // 2
                 kuyruk[:0] = [(i, orta), (orta, j)]
             else:
-                taranamayan.append({"first_id": ids[i], "last_id": ids[j - 1], "reason": "scan unavailable (content safety)"})
+                taranamayan.append({"first_id": ids[i], "last_id": ids[j - 1], "reason": LABELS["scan_unavailable"]})
         except ModelHatasi as e:
             log(f"Content warning scan unavailable: {e}")
             return {"status": "failed", "scenes": [], "unscanned": [], "error": str(e)[:300]}
@@ -1770,7 +1824,7 @@ DOSYA_PLATFORM = re.compile(r"(?<![A-Za-z0-9])(?:NF|AMZN|DSNP|ATVP|HMAX)(?![A-Za
 
 def notr_baslik(baslik: str) -> bool:
     """A track title that only names the target language (or is empty) says nothing about its origin."""
-    adlar = {"", TARGET["name"], LANGUAGES.get(TARGET["code"], {}).get("name", ""), *TARGET["codes"]}
+    adlar = {"", TARGET["name"], TARGET.get("display", ""), LANGUAGES.get(TARGET["code"], {}).get("name", ""), *TARGET["codes"]}
     return fold_latin(baslik.strip()).casefold() in {fold_latin(x).casefold() for x in adlar}
 
 
@@ -1898,19 +1952,20 @@ def ogrenme_raporu(a: dict, birimler: list[dict], is_dir: Path, etiket: str) -> 
 def ogrenme_md(r: dict, birimler: list[dict]) -> str:
     zaman = {b["id"]: sn_ass(b["start"])[:-3] for b in birimler}
     o = r.get("measurements", {})
-    s = [f"# Language level — {r.get('episode', '')}", "",
-         f"**{r['cefr']}** · {SUITABILITY_LABELS.get(r['suitability'], r['suitability'])} · confidence: {CONFIDENCE_LABELS.get(r['confidence'], r['confidence'])}", "", r["summary"], ""]
+    t = REPORT
+    s = [f"# {t['title'].format(episode=r.get('episode', ''))}", "",
+         f"**{r['cefr']}** · {t['suitability'].get(r['suitability'], r['suitability'])} · {t['confidence']}: "
+         f"{t['confidence_levels'].get(r['confidence'], r['confidence'])}", "", r["summary"], ""]
     if o:
-        s += [f"Reading load: {o['words_per_minute']} words/minute; median {o['cps_median']} columns/second, "
-              f"fastest 10% {o['cps_p90']}+; fast lines {o['fast_line_percent']}%. "
-              f"{o['unique_words']} unique words.", ""]
+        s += [t["reading_load"].format(wpm=o["words_per_minute"], median=o["cps_median"], p90=o["cps_p90"],
+                                       fast=o["fast_line_percent"], unique=o["unique_words"]), ""]
     if r.get("difficulties"):
-        s += ["**Difficulties:** " + "; ".join(r["difficulties"]), ""]
-    s += ["## Useful expressions", "", "| Time | Expression | Kind | Meaning | Usefulness |", "|---|---|---|---|---|"]
+        s += [f"**{t['difficulties']}:** " + "; ".join(r["difficulties"]), ""]
+    s += [f"## {t['expressions']}", "", "| " + " | ".join(t["expression_columns"]) + " |", "|---|---|---|---|---|"]
     for n in r.get("expressions", []):
         s.append(f"| {zaman.get(n['id'], '')} | {n['quote']} | {n['kind']} | {n['meaning']} | {n['usefulness']} |".replace("\n", " "))
-    s += ["", "## Level evidence", ""] + [f"- {zaman.get(k['id'], '')} “{k['quote']}” — {k['reason']}" for k in r.get("evidence", [])]
-    s += ["", f"_{r['note']} Profile: {r['profile']}_", ""]
+    s += ["", f"## {t['evidence']}", ""] + [f"- {zaman.get(k['id'], '')} “{k['quote']}” — {k['reason']}" for k in r.get("evidence", [])]
+    s += ["", f"_{t['note']} {t['profile']}: {r['profile']}_", ""]
     return "\n".join(s)
 
 
@@ -1920,7 +1975,7 @@ def uyari_olaylari(birimler: list[dict], sahneler: list[dict], bicim: list[str])
     for s in sahneler:
         b1, b2 = bul.get(str(s.get("first_id"))), bul.get(str(s.get("last_id")))
         if b1:
-            araliklar.append([b1["start"], max(b1["end"], (b2 or b1)["end"]), s.get("reason", "sensitive scene")])
+            araliklar.append([b1["start"], max(b1["end"], (b2 or b1)["end"]), s.get("reason") or LABELS["sensitive_scene"]])
     araliklar.sort()
     birlesik = []
     for bas, son, neden in araliklar:
@@ -2100,7 +2155,7 @@ def bolum_isle(a: dict, eser: str, sezon: int, no: int | None, video: Path | Non
     gecerli = [s for s in sahneler if "error" not in s] + tarama.get("unscanned", [])
     if sansur_acik and birimler and tarama["status"] == "failed":
 
-        gecerli = [{"first_id": birimler[0]["id"], "last_id": birimler[0]["id"], "reason": "content scan unavailable for this episode"}]
+        gecerli = [{"first_id": birimler[0]["id"], "last_id": birimler[0]["id"], "reason": LABELS["scan_unavailable_episode"]}]
     if sansur_acik and gecerli:
         ek_olaylar, sansur_kayit = uyari_olaylari(birimler, gecerli, ass.bicim)
         boyut = max(12, round(ass.play_res_y() * 0.042))
@@ -2131,7 +2186,7 @@ def bolum_isle(a: dict, eser: str, sezon: int, no: int | None, video: Path | Non
         if insan and insan.get("timing_match", 0) >= 0.7:
             hizali = is_dir / "human" / "aligned.ass"
             hizali.write_text(ass_kaydir(Path(insan["ass"]).read_text(encoding="utf-8", errors="replace"), insan["offset_seconds"]), encoding="utf-8")
-            ek = [(hizali, LABELS["human_track"].format(language=TARGET["name"]))]
+            ek = [(hizali, LABELS["human_track"].format(language=TARGET.get("display", TARGET["name"])))]
         molalar = []
         if a["break_chapters"]:
             molalar = mola_sec(durak_adaylari(a, birimler, is_dir, baglam), birimler, video_suresi(video))
@@ -2319,15 +2374,15 @@ def ogrenme_ozeti(a: dict, eser: str, sezon: int | None) -> Path:
         r = joku(f)
         if "cefr" in r:
             o = r.get("measurements", {})
-            satirlar.append(f"| {f.parent.name} | {r['cefr']} | {SUITABILITY_LABELS.get(r['suitability'], r['suitability'])} | "
+            satirlar.append(f"| {f.parent.name} | {r['cefr']} | {REPORT['suitability'].get(r['suitability'], r['suitability'])} | "
                             f"{o.get('words_per_minute', '')} | {o.get('cps_p90', '')} | {r['summary']} |".replace("\n", " "))
     hedef_dir = a["library_dir"] / eser / (f"Season {sezon:02d}" if sezon else "")
     hedef_dir.mkdir(parents=True, exist_ok=True)
     yol = hedef_dir / f"{LABELS['level_file']}.md"
-    yol.write_text("\n".join([f"# {eser} — Source subtitle reading assessment", "",
-                              "| Episode | CEFR | Suitability | Words/minute | Fast lines (columns/second, top 10%) | Summary |",
+    yol.write_text("\n".join([f"# {REPORT['season_title'].format(title=eser)}", "",
+                              "| " + " | ".join(REPORT["season_columns"]) + " |",
                               "|---|---|---|---|---|---|", *satirlar, "",
-                              "_Approximate content assessment; see level.md in each episode job archive._", ""]),
+                              f"_{REPORT['season_note']}_", ""]),
                    encoding="utf-8")
     return yol
 
@@ -2407,7 +2462,7 @@ def provider_fix(error, a: dict) -> str | None:
 def backend_check(a: dict) -> tuple[bool, str]:
     """The same one-request diagnostic is used by setup and check_backend.py."""
     try:
-        configure(a, "en", "en")
+        configure(dict(a), "en", "en")
         result, _ = model_cagir(a["model"], 'Return {"ok":true}. No tools.',
                                 {"type": "object", "properties": {"ok": {"type": "boolean"}},
                                  "required": ["ok"], "additionalProperties": False}, 60, deneme=1)
@@ -2600,11 +2655,26 @@ def failed_job_report(a: dict, eser: str, sezon: int, no: int | None, error) -> 
         jyaz(path, report)
 
 
+def rehber_metni(a: dict) -> str:
+    """Prompt guide: guide.md + guides/<target>.md (or one replacement file in "guide"), then "guide_extra" files."""
+    if a.get("guide"):  # a complete replacement guide instead of guide.md + guides/<target>.md
+        rehber = Path(a["guide"]).expanduser().read_text(encoding="utf-8")
+    else:
+        rehber = (KOK / "guide.md").read_text(encoding="utf-8")
+        addendum = KOK / "guides" / (TARGET["code"] + ".md")
+        if addendum.exists():
+            rehber += "\n\n" + addendum.read_text(encoding="utf-8")
+    for ek in guide_extras(a):  # the user's own additions (audience, taste) after the shipped guide
+        rehber += "\n\n" + Path(ek).expanduser().read_text(encoding="utf-8")
+    return (f"Source language: {SOURCE['name']} ({SOURCE['code']}). "
+            f"Target language: {TARGET['name']} ({TARGET['code']}).\n\n" + rehber)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(prog="dragoman", description="Translate and review subtitles, then verify and mux an MKV")
     ap.add_argument("girdi", nargs="?", metavar="INPUT", help="video, video directory, or ASS/SRT file")
-    ap.add_argument("--target", help="target ISO 639-1 or 639-2 code (required for translation)")
-    ap.add_argument("--source", default="en", help="source language code (default: en)")
+    ap.add_argument("--target", help="target ISO 639-1 or 639-2 code (required unless config sets \"target\")")
+    ap.add_argument("--source", help="source language code (default: config \"source\", else en)")
     ap.add_argument("--source-name", help="English name for an unknown source code")
     ap.add_argument("--target-name", help="English name for an unknown target code")
     ap.add_argument("--setup", action="store_true", help="configure a provider interactively and check it")
@@ -2631,17 +2701,25 @@ def main() -> None:
     ap.add_argument("--detach", dest="arka_plan", action="store_true", help="run independently of this session and print log path")
     ap.add_argument("--no-human-check", dest="insan_yok", action="store_true", help="skip checking existing target-language translations")
     ap.add_argument("--level-only", dest="duzey", action="store_true", help="assess source language level without translation")
+    ap.add_argument("--languages", action="store_true", help="list target languages with a built-in guide and labels")
     x = ap.parse_args()
+    if x.languages:
+        for code in builtin_languages():
+            print(f"{code}  {LANGUAGES.get(code, {}).get('name', code)} ({locale(code).get('native_name', '')})"
+                  + ("" if (KOK / "guides" / f"{code}.md").exists() else "  [labels only]"))
+        return
     if x.setup:
         if not interactive():
             ap.error("--setup needs an interactive terminal; run it in a terminal, or configure backend/model in config.json")
         sys.exit(0 if setup(x.config) else 2)
-    if not x.girdi or not x.target:
-        ap.error("INPUT and --target are required for translation; use --setup to configure a provider")
     try:
         a = ayarlar(x.config) if x.config else ayarlar()
     except (ValueError, OSError):
         ap.error("Could not read configuration; fix config.json syntax/permissions or choose --config PATH")
+    x.target = x.target or a.get("target")
+    x.source = x.source or a.get("source") or "en"
+    if not x.girdi or not x.target:
+        ap.error("INPUT and --target (or \"target\" in config) are required for translation; use --setup to configure a provider")
     for key, value in (("backend", x.backend), ("model", x.model), ("output_dir", x.output)):
         if value is not None:
             a[key] = value
@@ -2695,15 +2773,7 @@ def main() -> None:
     if shutil.which("caffeinate"):
         subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     girdi = Path(os.path.expanduser(x.girdi)).resolve()
-    if a.get("guide"):  # a complete replacement guide (for example a personal one) instead of guide.md + guides/<target>.md
-        rehber = Path(a["guide"]).expanduser().read_text(encoding="utf-8")
-    else:
-        rehber = (KOK / "guide.md").read_text(encoding="utf-8")
-        addendum = KOK / "guides" / (TARGET["code"] + ".md")
-        if addendum.exists():
-            rehber += "\n\n" + addendum.read_text(encoding="utf-8")
-    rehber = (f"Source language: {SOURCE['name']} ({SOURCE['code']}). "
-              f"Target language: {TARGET['name']} ({TARGET['code']}).\n\n" + rehber)
+    rehber = rehber_metni(a)
 
     def temiz_ad(s: str) -> str:
         s = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", s)

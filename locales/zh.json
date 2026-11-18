@@ -1,0 +1,50 @@
+{
+  "native_name": "中文",
+  "labels": {
+    "warning": "⚠ 可能存在敏感画面（{reasons}）→ {until}",
+    "break": "⏸ 休息点 {n}",
+    "start": "开始",
+    "human_track": "{language}（人工翻译）",
+    "level_file": "语言难度",
+    "sensitive_scene": "敏感画面",
+    "scan_unavailable": "无法扫描（内容安全限制）",
+    "scan_unavailable_episode": "本集无法进行内容扫描"
+  },
+  "report": {
+    "title": "语言难度 — {episode}",
+    "confidence": "置信度",
+    "reading_load": "阅读负荷：每分钟 {wpm} 词；中位数每秒 {median} 字，最快 10% 为 {p90}+；快速字幕占 {fast}%。共 {unique} 个不重复词。",
+    "difficulties": "难点",
+    "expressions": "实用表达",
+    "expression_columns": [
+      "时间",
+      "表达",
+      "类型",
+      "释义",
+      "实用性"
+    ],
+    "evidence": "难度依据",
+    "note": "仅为内容大致评估，并非个人测试或 CEFR 证书。",
+    "profile": "概况",
+    "season_title": "{title} — 源字幕阅读难度评估",
+    "season_columns": [
+      "集数",
+      "CEFR",
+      "适看度",
+      "词/分钟",
+      "快速字幕（字/秒，前 10%）",
+      "摘要"
+    ],
+    "season_note": "仅为内容大致评估，详见每集任务存档中的 level.md。",
+    "suitability": {
+      "comfortable": "轻松观看",
+      "productive_challenge": "有挑战但有益",
+      "substantial_support": "建议配合较多辅助"
+    },
+    "confidence_levels": {
+      "low": "低",
+      "medium": "中",
+      "high": "高"
+    }
+  }
+}

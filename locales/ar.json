@@ -1,0 +1,50 @@
+{
+  "native_name": "العربية",
+  "labels": {
+    "warning": "⚠ مشهد حساس محتمل ({reasons}) → {until}",
+    "break": "⏸ نقطة استراحة {n}",
+    "start": "البداية",
+    "human_track": "{language} (ترجمة بشرية)",
+    "level_file": "مستوى اللغة",
+    "sensitive_scene": "مشهد حساس",
+    "scan_unavailable": "تعذّر الفحص (سلامة المحتوى)",
+    "scan_unavailable_episode": "تعذّر فحص المحتوى لهذه الحلقة"
+  },
+  "report": {
+    "title": "مستوى اللغة — {episode}",
+    "confidence": "مستوى الثقة",
+    "reading_load": "عبء القراءة: {wpm} كلمة/دقيقة؛ الوسيط {median} حرف/ثانية، أسرع 10% بمعدل {p90}+؛ السطور السريعة {fast}%. {unique} كلمة فريدة.",
+    "difficulties": "الصعوبات",
+    "expressions": "تعبيرات مفيدة",
+    "expression_columns": [
+      "الوقت",
+      "التعبير",
+      "النوع",
+      "المعنى",
+      "الفائدة"
+    ],
+    "evidence": "أدلة المستوى",
+    "note": "تقييم تقريبي للمحتوى؛ وليس اختبارًا شخصيًا أو شهادة CEFR.",
+    "profile": "ملف المتعلم",
+    "season_title": "{title} — تقييم قراءة الترجمة المصدرية",
+    "season_columns": [
+      "الحلقة",
+      "CEFR",
+      "الملاءمة",
+      "كلمة/دقيقة",
+      "السطور السريعة (حرف/ثانية، أعلى 10%)",
+      "الملخص"
+    ],
+    "season_note": "تقييم تقريبي للمحتوى؛ راجع ملف level.md في أرشيف مهمة كل حلقة.",
+    "suitability": {
+      "comfortable": "مشاهدة مريحة",
+      "productive_challenge": "صعب لكنه مفيد",
+      "substantial_support": "يُوصى بدعم كبير"
+    },
+    "confidence_levels": {
+      "low": "منخفض",
+      "medium": "متوسط",
+      "high": "مرتفع"
+    }
+  }
+}

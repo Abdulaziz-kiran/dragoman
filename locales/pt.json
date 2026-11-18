@@ -1,0 +1,50 @@
+{
+  "native_name": "Português",
+  "labels": {
+    "warning": "⚠ Possível cena sensível ({reasons}) → {until}",
+    "break": "⏸ Ponto de pausa {n}",
+    "start": "Início",
+    "human_track": "{language} (tradução humana)",
+    "level_file": "Nível de idioma",
+    "sensitive_scene": "cena sensível",
+    "scan_unavailable": "análise indisponível (segurança do conteúdo)",
+    "scan_unavailable_episode": "análise de conteúdo indisponível para este episódio"
+  },
+  "report": {
+    "title": "Nível de idioma — {episode}",
+    "confidence": "confiança",
+    "reading_load": "Carga de leitura: {wpm} palavras/minuto; mediana de {median} caracteres/segundo, 10% mais rápidos {p90}+; falas rápidas {fast}%. {unique} palavras únicas.",
+    "difficulties": "Dificuldades",
+    "expressions": "Expressões úteis",
+    "expression_columns": [
+      "Tempo",
+      "Expressão",
+      "Tipo",
+      "Significado",
+      "Utilidade"
+    ],
+    "evidence": "Evidências do nível",
+    "note": "Avaliação aproximada do conteúdo; não é um teste pessoal nem certificado CEFR.",
+    "profile": "Perfil",
+    "season_title": "{title} — Avaliação de leitura das legendas originais",
+    "season_columns": [
+      "Episódio",
+      "CEFR",
+      "Adequação",
+      "Palavras/minuto",
+      "Falas rápidas (caracteres/segundo, top 10%)",
+      "Resumo"
+    ],
+    "season_note": "Avaliação aproximada do conteúdo; consulte level.md no arquivo de cada episódio.",
+    "suitability": {
+      "comfortable": "fácil de acompanhar",
+      "productive_challenge": "desafiador, mas útil",
+      "substantial_support": "apoio substancial recomendado"
+    },
+    "confidence_levels": {
+      "low": "baixa",
+      "medium": "média",
+      "high": "alta"
+    }
+  }
+}

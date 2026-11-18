@@ -58,11 +58,26 @@ python3 dragoman.py "<file.ass>" --title "<Show>" --target fr --episode 1
 python3 dragoman.py "<folder>" --title "<Show>" --source ja --target en
 ```
 
-Language codes are ISO 639-1 or 639-2. Run `python3 dragoman.py --help` for every option. Common ones: `--season N`, `--source-subtitle FILE`, `--audio-lang CODE`, `--redo`, `--no-human-check`, `--no-level-report`, `--no-content-warnings`, `--no-break-chapters`, `--no-mux`, `--detach`.
+Language codes are ISO 639-1 or 639-2. Any pair works; see [Languages](#languages) for the ones with built-in support. Run `python3 dragoman.py --help` for every option. Common ones: `--season N`, `--source-subtitle FILE`, `--audio-lang CODE`, `--redo`, `--no-human-check`, `--no-level-report`, `--no-content-warnings`, `--no-break-chapters`, `--no-mux`, `--detach`.
 
 Output goes to `~/dragoman/` (`--output` changes it). Finished MKVs are in `watch/`, subtitles in `library/`, the full record of each job in `jobs/`.
 
-Copy [config.example.json](config.example.json) to `config.json` to change models per role (`model_translate`, `model_review`, `model_gate`, `model_series`, `model_warnings`, `model_level`), chunk sizes and paths (`output_dir`, or `work_dir`, `library_dir`, `jobs_dir`, `watch_dir` separately). `guide` points to a complete guide of your own instead of the bundled one, `audio_lang` sets a default audio language, `labels` changes on-screen and file labels (warning overlay, break chapters, human-translation track, level report file), `report_language` and `warning_language` set the language of the level report and of on-screen warning reasons, `context_notes` adds instructions to the episode-context step, and `--config PATH` keeps a personal configuration outside the repository. The translation style lives in [guide.md](guide.md), and `guides/<language>.md` adds rules for one target language. A [Turkish guide](guides/tr.md) is included; guides for other languages are welcome.
+Copy [config.example.json](config.example.json) to `config.json` to change models per role (`model_translate`, `model_review`, `model_gate`, `model_series`, `model_warnings`, `model_level`), chunk sizes and paths (`output_dir`, or `work_dir`, `library_dir`, `jobs_dir`, `watch_dir` separately). `source` and `target` set a default language pair (then `--target` can be left out), `guide_extra` adds your own guide file(s) after the bundled guide (for example who you translate for, or taste rules), `guide` points to a complete guide of your own instead of the bundled one, `audio_lang` sets a default audio language, `labels` changes on-screen and file labels (warning overlay, break chapters, human-translation track, level report file), `report_language` and `warning_language` set the language of the level report and of on-screen warning reasons (default: the target language), `context_notes` adds instructions to the episode-context step, and `--config PATH` keeps a personal configuration outside the repository. The translation style lives in [guide.md](guide.md), and `guides/<language>.md` adds rules for one target language.
+
+## Languages
+
+Every pair of ISO 639 languages can be used. These target languages also have built-in support: a guide addendum with that language's conventions (`guides/<code>.md`: formal and informal address, titles, punctuation, typical mistakes, reviewer checks) and on-screen text in that language (`locales/<code>.json`: warning overlay, break chapters, subtitle track title, level report).
+
+| Code | Language | | Code | Language |
+|---|---|---|---|---|
+| `en` | English | | `ja` | Japanese |
+| `tr` | Turkish | | `zh` | Chinese (Simplified by default) |
+| `ru` | Russian | | `ko` | Korean |
+| `es` | Spanish | | `ar` | Arabic (Modern Standard) |
+| `de` | German | | `pt` | Portuguese (Brazilian by default) |
+| `fr` | French | | | |
+
+`python3 dragoman.py --languages` prints the list. The Turkish and English addenda were written and reviewed by hand; the others were drafted with an LLM and checked for structure, so corrections from native speakers are very welcome. Other target languages use the general guide and English on-screen text. To add one, copy `locales/en.json` and write `guides/<code>.md`; `python3 tests.py` checks that keys and placeholders match.
 
 [SKILL.md](SKILL.md) tells coding agents how to run the tool.
 
@@ -76,7 +91,7 @@ After a run, it can ask whether you want to share an anonymous report. It is off
 
 - Image-based subtitles (PGS) are not read. There is no OCR.
 - It translates from a subtitle, not from audio, so errors in the source subtitle carry over.
-- Right-to-left scripts have no special handling and are untested.
+- Right-to-left scripts have no special handling and are untested; the Arabic pack is text only.
 - For scripts outside Latin, Greek and Cyrillic you need to pass `--fallback-font` if the embedded fonts lack the characters.
 - On very long series the series guide gets compressed, and a new season only extends the memory.
 - The meaning check of review corrections is itself a model call and can be wrong.
@@ -91,4 +106,4 @@ The code is under the [MIT License](LICENSE). Source Sans 3 in `fonts/` is under
 
 ## Türkçe
 
-Altyazıları yapay zekâ ile istediğiniz dile çevirir (Türkçe altyazı çeviri dahil), ayrı bir adımda inceler ve videoyu yeniden kodlamadan MKV olarak paketler. Anime, dizi ve film için. Kurulum için yukarıdaki adımlar geçerli, Türkçe için örnek: `--target tr`. Türkçeye özel çeviri kuralları [guides/tr.md](guides/tr.md) dosyasındadır.
+Altyazıları yapay zekâ ile istediğiniz dile çevirir (Türkçe altyazı çeviri dahil), ayrı bir adımda inceler ve videoyu yeniden kodlamadan MKV olarak paketler. Anime, dizi ve film için. Kurulum için yukarıdaki adımlar geçerli, Türkçe için örnek: `--target tr`. Türkçe yerleşik desteklidir: Türkçeye özel çeviri kuralları [guides/tr.md](guides/tr.md), ekrandaki uyarı, mola ve rapor metni [locales/tr.json](locales/tr.json) dosyasındadır. Kendi tercihlerinizi (izleyici kitlesi, üslup) `guide_extra` ile ayrı bir dosyada ekleyebilirsiniz.

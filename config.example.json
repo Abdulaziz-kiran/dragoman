@@ -1,6 +1,8 @@
 {
   "backend": "openai",
   "model": "your-model-name",
+  "source": "en",
+  "target": "es",
   "base_url": "https://api.openai.com/v1",
   "api_key_env": "OPENAI_API_KEY",
   "output_dir": "~/dragoman",
@@ -18,10 +20,9 @@
   "human_threshold": 8.5,
   "level_report": true,
   "learner_profile": "intermediate learner of the source language",
-  "report_language": "English",
-  "warning_language": "English",
   "content_warnings": true,
   "break_chapters": true,
   "fallback_fonts": [],
-  "share_prompt": true
+  "share_prompt": true,
+  "guide_extra": []
 }
