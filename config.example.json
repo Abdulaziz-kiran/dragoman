@@ -18,6 +18,8 @@
   "human_threshold": 8.5,
   "level_report": true,
   "learner_profile": "intermediate learner of the source language",
+  "report_language": "English",
+  "warning_language": "English",
   "content_warnings": true,
   "break_chapters": true,
   "fallback_fonts": [],

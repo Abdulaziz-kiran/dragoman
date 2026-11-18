@@ -1357,6 +1357,42 @@ kontrol("Viewer-facing labels are configurable per key", _ev and _ev[0].endswith
 A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "tr")
 kontrol("Labels return to defaults on reconfigure", A.LABELS == A.LABELS_DEFAULT)
 
+with tempfile.TemporaryDirectory() as td:
+    prompts = []
+    with patch.object(A, "model_cagir", side_effect=lambda m, p, s, t: prompts.append(p) or ({"cefr": "B2", "confidence": "high", "suitability": "comfortable",
+                      "summary": "s", "difficulties": [], "evidence": [], "expressions": []}, {})):
+        A.ogrenme_raporu(dict(A.VARSAYILAN, model_level="m", report_language="Turkish"), [{"id": "1", "kind": "dialogue", "text": "Hello there", "start": 0, "end": 2}], Path(td), "x")
+        A.ogrenme_raporu(dict(A.VARSAYILAN, model_level="m"), [{"id": "1", "kind": "dialogue", "text": "Hello there", "start": 0, "end": 2}], Path(td) / "e", "x")
+    kontrol("Level report language is configurable, English by default", "Write the report in Turkish." in prompts[0] and "Write the report in English." in prompts[1])
+
+# A failed attempt keeps the tokens it spent in its receipt.
+with tempfile.TemporaryDirectory() as td:
+    class SpentAgy(SahteP2):
+        def communicate(s, *a, **k):
+            return '{"event":"result","result":{"status":"ERROR","error":"Unknown model: x","usage":{"input_tokens":42}}}', ""
+    A.RECEIPT[:] = [Path(td) / "r.jsonl", "S01E01"]
+    try:
+        with patch.object(A.subprocess, "Popen", SpentAgy):
+            try:
+                A.model_cagir("m", "x", A.CEVIRI_SEMA, 1)
+            except A.ModelHatasi:
+                pass
+    finally:
+        A.RECEIPT[:] = [None, ""]
+    kontrol("Failed attempt receipt keeps spent usage", _j.loads((Path(td) / "r.jsonl").read_text())["usage"] == {"input_tokens": 42})
+warn_prompts = []
+with patch.object(A, "model_cagir", side_effect=lambda m, p, s, t: warn_prompts.append(p) or ({"scenes": []}, {})):
+    A._sansur_istek(dict(A.VARSAYILAN, model_warnings="m"), ["1 [0:01] x"])
+    A._sansur_istek(dict(A.VARSAYILAN, model_warnings="m", warning_language="Turkish"), ["1 [0:01] x"])
+kontrol("Warning reasons default to English; language is configurable", "reason in English" in warn_prompts[0] and "reason in Turkish" in warn_prompts[1])
+with tempfile.TemporaryDirectory() as td:
+    ctx = []
+    _cass = A.Ass(_bos_ass + "Dialogue: 0,0:00:01.00,0:00:02.00,D,,0,0,0,,Hello there.\n")
+    _cb, _ = A.birimleri_cikar(_cass)
+    with patch.object(A, "model_cagir", side_effect=lambda m, p, s, t: ctx.append(p) or ({k: [] for k in A.BAGLAM_SEMA["required"]}, {})):
+        A.bolum_baglami(dict(A.VARSAYILAN, model_series="m", context_notes="NOTE-XYZ"), _cass, _cb, "", {}, "", Path(td))
+    kontrol("Context notes are appended to the episode-context task", "NOTE-XYZ" in ctx[0] and ctx[0].index("NOTE-XYZ") < ctx[0].index("---- EPISODE"))
+
 # Scan every shipped text artifact, excluding documented local-only coordination files.
 root=Path(__file__).resolve().parent
 local_names={"CLAUDE.md","DURUM.md","KARARLAR.md"}

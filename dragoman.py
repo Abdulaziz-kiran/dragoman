@@ -42,7 +42,8 @@ VARSAYILAN = {
     # Off by default: only a streaming-platform target track (title or neutral title + filename tag) skips translation.
     "human_scoring": False,
     "audio_lang": None, "guide": None,
-    "labels": {},
+    "labels": {}, "report_language": "English", "warning_language": "English",
+    "context_notes": "",  # extra instructions appended to the episode-context task (for example memory-label rules)
 }
 # Viewer-facing labels; config "labels" overrides single keys (for example in the target language).
 LABELS_DEFAULT = {"warning": "⚠ Possible sensitive scene ({reasons}) → {until}", "break": "⏸ Break point {n}", "start": "Start",
@@ -419,6 +420,7 @@ def _agy(model, istem, sema, timeout):
     sonuc = _sonuc_bul(cikti)
     if sonuc and sonuc.get("status") == "SUCCESS" and isinstance(sonuc.get("structured_output"), dict):
         return sonuc["structured_output"], sonuc.get("usage", {})
+    _CALL.usage = (sonuc or {}).get("usage")  # a failed attempt may still have spent tokens
     raise ModelHatasi((sonuc or {}).get("error") or (hata if hata and hata.strip() else "") or (
         f"unrecognized reply: no result event or structured output ({len(cikti)} bytes)" if (cikti or "").strip() else "empty reply"))
 
@@ -441,10 +443,14 @@ def _cli(backend, model, istem, sema, timeout):
             return json.loads(output_file.read_text(encoding="utf-8")), {}
         cmd = ["claude", "-p", "--output-format", "json", "--json-schema", json.dumps(sema), "--model", model, "--tools", ""]
         result = subprocess.run(cmd, input=istem, capture_output=True, text=True, cwd=tmp, timeout=timeout)
-        if result.returncode:
+        try:
+            data = json.loads(result.stdout)
+        except (json.JSONDecodeError, TypeError):
+            data = None
+        if isinstance(data, dict):
+            _CALL.session, _CALL.usage = data.get("session_id"), data.get("usage")
+        if result.returncode or not isinstance(data, dict):
             raise ModelHatasi(result.stderr or result.stdout or "claude-code failed")
-        data = json.loads(result.stdout)
-        _CALL.session = data.get("session_id") if isinstance(data, dict) else None
         if data.get("is_error") or "structured_output" not in data:
             raise ModelHatasi(str(data.get("result", "claude-code failed")))
         return data.get("structured_output"), data.get("usage", {})
@@ -464,7 +470,7 @@ def model_cagir(model: str, istem: str, sema: dict, zaman_asimi: int, deneme: in
     while i < deneme:
         retry_after = None
         t0 = time.time()
-        _CALL.session = None
+        _CALL.session = _CALL.usage = None
         try:
             if backend == "openai":
                 reply, usage = _openai(model, istem, sema, zaman_asimi)
@@ -474,6 +480,7 @@ def model_cagir(model: str, istem: str, sema: dict, zaman_asimi: int, deneme: in
                 reply, usage = _cli(backend, model, istem, sema, zaman_asimi)
             else:
                 raise ModelHatasi("Unknown backend")
+            _CALL.usage = usage
             if not isinstance(reply, dict):
                 raise ModelHatasi("Reply must be a JSON object")
             _validate(reply, sema)
@@ -482,10 +489,10 @@ def model_cagir(model: str, istem: str, sema: dict, zaman_asimi: int, deneme: in
             return reply, usage
         except _RetryAfter as error:
             retry_after, son_hata = error.seconds, error.message
-            receipt_write(model, stage, i, t0, "ERROR", None, son_hata)
+            receipt_write(model, stage, i, t0, "ERROR", getattr(_CALL, "usage", None), son_hata)
         except (ModelHatasi, OSError, ValueError, KeyError, IndexError, TypeError, subprocess.SubprocessError) as error:
             fix = provider_fix(error, BACKEND_CONFIG)
-            receipt_write(model, stage, i, t0, "ERROR", None, fix or str(error))
+            receipt_write(model, stage, i, t0, "ERROR", getattr(_CALL, "usage", None), fix or str(error))
             if fix:
                 RUN_STATS["errors"].add(error_category(error))
                 _hata_kaydi(model, fix)
@@ -1207,7 +1214,8 @@ def bolum_baglami(a: dict, ass: "Ass", birimler: list[dict], seri: str, hafiza: 
              "Register is free text describing how each speaker addresses each listener in the target language: "
              "T-V form, politeness, honorifics, or n/a. Preserve previously used decisions unless the source changes; "
              "explain any change. Context never overrides clear source meaning. Follow the guide, invent nothing, "
-             "and do not leak later-episode information. No tools.\n" + DURAK_GOREV +
+             "and do not leak later-episode information. No tools.\n" + DURAK_GOREV
+             + (f"\n{a['context_notes']}\n" if a.get("context_notes") else "") +
              "\n---- EPISODE (id [minute:second] [speaker] text) ----\n" + "\n".join(satirlar))
     cevap, kullanim = model_cagir(a["model_series"], istem, BAGLAM_SEMA, a["timeout_seconds"])
     sonuc = {k: cevap.get(k, []) for k in BAGLAM_SEMA["required"]}
@@ -1557,7 +1565,7 @@ def _sansur_istek(a, satirlar):
     istem = ("Prepare content warnings from subtitle dialogue (id [time] text). Identify romantic/sexual kissing, "
              "nudity, bed scenes, sexual innuendo or sexual tension. Exclude ordinary violence and family kisses "
              "on cheek/forehead. Do not include uncertain guesses. Return first_id, last_id and a brief "
-             f"reason in {TARGET['name']} (it is shown on screen to viewers) for each scene, or an empty list. No tools.\n\n" + "\n".join(satirlar))
+             f"reason in {a.get('warning_language') or 'English'} (it is shown on screen) for each scene, or an empty list. No tools.\n\n" + "\n".join(satirlar))
     cevap, _ = model_cagir(a["model_warnings"], istem, SANSUR_SEMA, a["timeout_seconds"])
     return cevap.get("scenes", [])
 
@@ -1862,11 +1870,11 @@ def ogrenme_raporu(a: dict, birimler: list[dict], is_dir: Path, etiket: str) -> 
     diyalog = [b for b in birimler if b["kind"] in ("dialogue", "song") and _sade(b["text"])]
     olcum = okuma_olcumu(birimler)
     istem = (f"Learner profile: {a['learner_profile'] or 'Not specified; assess content difficulty without personal assumptions.'}\n"
-             "Assess the source subtitles for reading comprehension. Write the report in English. Give approximate "
+             f"Assess the source subtitles for reading comprehension. Write the report in {a.get('report_language') or 'English'}. Give approximate "
              "CEFR, confidence, suitability (comfortable, productive_challenge, substantial_support), a two-sentence "
              "summary, concrete difficulties, 3-5 evidence quotes and 8-12 useful expressions appropriate to the "
              "profile. Without a profile, describe suitability generally. Every quote must occur verbatim in its "
-             "source line; include ID, kind, English meaning and usefulness. You cannot assess unseen audio/video. "
+             "source line; include ID, kind, meaning (in the report language) and usefulness. You cannot assess unseen audio/video. "
              f"Local reading measurements: {json.dumps(olcum, ensure_ascii=False)}\nNo tools.\n\n"
              + "\n".join(f'{b["id"]}: {_sade(b["text"])}' for b in diyalog))
     try:

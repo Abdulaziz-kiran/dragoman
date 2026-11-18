@@ -30,8 +30,8 @@ Guide: `guide.md`, plus `guides/<target-code>.md` if present, or one complete fi
 
 All three are on by default and can also be disabled with their config boolean set to false:
 
-- `--no-level-report` disables the English report assessing source-subtitle difficulty, CEFR, reading load and source-verified useful expressions, using configurable `learner_profile` (default: intermediate learner of the source language). `--level-only` assesses without translating.
-- `--no-content-warnings` disables dialogue-based sensitive-scene overlays. These are estimates, not visual scene detection; unavailable scan ranges are reported and warned about.
+- `--no-level-report` disables the report (written in `report_language`, default English) assessing source-subtitle difficulty, CEFR, reading load and source-verified useful expressions, using configurable `learner_profile` (default: intermediate learner of the source language). `--level-only` assesses without translating.
+- `--no-content-warnings` disables dialogue-based sensitive-scene overlays (reasons in `warning_language`, overlay text from `labels.warning`). These are estimates, not visual scene detection; unavailable scan ranges are reported and warned about.
 - `--no-break-chapters` disables natural viewing breaks as MKV chapters; existing chapters survive. No video cutting.
 
 ## Output and recovery
