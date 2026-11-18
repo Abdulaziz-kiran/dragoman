@@ -11,8 +11,10 @@ Works on anime, TV series and films. Takes the subtitle track inside an MKV, or 
 ## What it does
 
 - Reads the whole series and each episode first: characters, who addresses whom and how, terminology, tone.
-- Translates in chunks, then runs an independent review pass. Deliberately broken "trap" lines test whether the reviewer is paying attention.
-- If a good human translation in your target language is already in the folder or the MKV, scores it and uses it instead of translating.
+- Translates in chunks, then runs an independent review pass. Deliberately broken "trap" lines test whether the reviewer is paying attention. Every correction passes a separate meaning check before it is applied; a correction that drops meaning is rejected.
+- Shows the translator how long each line stays on screen. A dialogue line still too long to read at `target_cps` characters per second is extended by up to `max_extension_seconds`, never into the next line.
+- Writes a receipt for every model call, failed ones included: stage, backend, model, duration, tokens and session id (`work/<title>/receipts.jsonl`, summed per episode in `record.json`).
+- If the MKV already carries a target-language track from a streaming platform (Netflix, Amazon, Disney+, Crunchyroll… in the track title, or NF/AMZN/DSNP/ATVP/HMAX in the filename when the track title is neutral), delivers that track instead of translating. Other embedded tracks stay in the MKV as a second track. With `"human_scoring": true` the older path returns: subtitle files in the folder and embedded tracks are aligned and scored, and a good one is used.
 - Keeps ASS tags, timing and styles.
 - Remuxes without re-encoding and verifies with SHA-256 that video and audio packets did not change.
 - Checks that embedded fonts actually contain the characters of your language, and falls back to Source Sans 3 (Latin, Greek, Cyrillic) or a font you supply.
@@ -60,7 +62,7 @@ Language codes are ISO 639-1 or 639-2. Run `python3 dragoman.py --help` for ever
 
 Output goes to `~/dragoman/` (`--output` changes it). Finished MKVs are in `watch/`, subtitles in `library/`, the full record of each job in `jobs/`.
 
-Copy [config.example.json](config.example.json) to `config.json` to change models per role, chunk sizes and paths. The translation style lives in [guide.md](guide.md), and `guides/<language>.md` adds rules for one target language. A [Turkish guide](guides/tr.md) is included; guides for other languages are welcome.
+Copy [config.example.json](config.example.json) to `config.json` to change models per role (`model_translate`, `model_review`, `model_gate`, `model_series`, `model_warnings`, `model_level`), chunk sizes and paths (`output_dir`, or `work_dir`, `library_dir`, `jobs_dir`, `watch_dir` separately). `guide` points to a complete guide of your own instead of the bundled one, `audio_lang` sets a default audio language, `labels` changes on-screen and file labels (warning overlay, break chapters, human-translation track, level report file), and `--config PATH` keeps a personal configuration outside the repository. The translation style lives in [guide.md](guide.md), and `guides/<language>.md` adds rules for one target language. A [Turkish guide](guides/tr.md) is included; guides for other languages are welcome.
 
 [SKILL.md](SKILL.md) tells coding agents how to run the tool.
 
@@ -77,7 +79,7 @@ After a run, it can ask whether you want to share an anonymous report. It is off
 - Right-to-left scripts have no special handling and are untested.
 - For scripts outside Latin, Greek and Cyrillic you need to pass `--fallback-font` if the embedded fonts lack the characters.
 - On very long series the series guide gets compressed, and a new season only extends the memory.
-- Review corrections are not themselves checked and can occasionally lose meaning.
+- The meaning check of review corrections is itself a model call and can be wrong.
 - Tests do not call a model; model behaviour is only visible in real runs. Real runs so far are few.
 - Internal Python identifiers are in Turkish, for now.
 

@@ -623,7 +623,7 @@ for source_code, target_code, has_kanji in (("en", "es", False), ("ja", "en", Tr
     kontrol("CJK extraction for " + source_code + " -> " + target_code,
             any("明日" in b["text"] for b in ordinary_units) == has_kanji)
     kontrol("Japanese source permits kanji and romaji styles", any("ashita" in b["text"] for b in units) == (source_code == "ja"))
-    packet = [{"id": "1", "text": "A source sentence", "kind": "dialogue", "style": "Default"}]
+    packet = [{"id": "1", "text": "A source sentence", "kind": "dialogue", "style": "Default", "start": 1.0, "end": 3.0}]
     with patch.object(A, "model_cagir", return_value=({"translations": {"1": "明日は晴れる"}}, {})):
         reply, _ = A._cevir_istek({"model_translate": "fake", "timeout_seconds": 1}, packet, [], [], "", "")
     kontrol("CJK output acceptance for " + source_code + " -> " + target_code, bool(reply) == has_kanji)
@@ -827,6 +827,8 @@ with tempfile.TemporaryDirectory() as td:
         if schema == A.INCELEME_SEMA:
             ids = re.findall(r"^(\d+) \[", prompt, re.M)
             return {"corrections": [{"id": ids[1], "category": "meaning_error", "new": "Una frase corregida.", "reason": "Meaning restored"}], "last_reviewed_id":ids[-1]}, {}
+        if schema == A.KAPI_SEMA:
+            return {"decisions": [{"id": i, "decision": "accept", "reason": "-"} for i in re.findall(r"^(\d+) \[", prompt.split("---- TASK ----")[-1], re.M)]}, {}
         raise AssertionError("Unexpected opt-in model call")
     def run_pipeline(args):
         with patch.object(sys, "argv", args), patch.object(A, "ayarlar", return_value=dict(A.VARSAYILAN)), patch.object(A.shutil, "which", return_value=None), patch.object(A, "model_cagir", side_effect=fake_pipeline_model), contextlib.redirect_stdout(io.StringIO()):
@@ -838,7 +840,7 @@ with tempfile.TemporaryDirectory() as td:
     kontrol("End-to-end multilingual subtitle delivery", "Una frase corregida." in final and "明日は晴れる" in final and "ashita wa hareru" in final and record["correction_count"] == 1)
     kontrol("Target-code library tag and English work filenames", (output / "library" / "Example series" / "Season 01" / "Example series S01E01 [ES].ass").exists()
             and (output / "jobs" / "Example series" / "S01E01" / "record.json").exists())
-    kontrol("Explicit opt-outs disable report and warning calls", len(calls) == 4 and record["warning_status"] == "off" and record["level_report"] is None)
+    kontrol("Explicit opt-outs disable report and warning calls (series, context, translation, review, meaning gate)", len(calls) == 5 and sum(s == A.KAPI_SEMA for _, s in calls) == 1 and record["warning_status"] == "off" and record["level_report"] is None)
     previous_calls = len(calls)
     run_pipeline(cli_args)
     kontrol("Completed translation and review resume without model calls", len(calls) == previous_calls)
@@ -1100,6 +1102,261 @@ for failure,expected in (("quota exhausted","wait for reset"),("content safety r
         ok,message=A.backend_check(dict(A.VARSAYILAN,backend="agy",model="fake"))
     kontrol("Setup diagnostic stays one request and gives a fix: " + failure, not ok and transport.call_count==1 and not quota.called and not sleep.called and expected in message)
 
+# 1.2.0: per-call receipts with session id; failed attempts are written and enter the episode summary.
+A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "tr")
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    class ReceiptAgy(SahteP2):
+        def communicate(s, *a, **k):
+            return ('{"event":"init","conversation_id":"abc-123"}\n{"event": "result", "result": {"status": "SUCCESS", '
+                    '"structured_output": {"translations": {}}, "usage": {"input_tokens": 10, "output_tokens": 3}}}'), ""
+    A.RECEIPT[:] = [td / "receipts.jsonl", "S01E02"]; A.HATA_DOSYASI = None
+    try:
+        with patch.object(A.subprocess, "Popen", SahteP3):
+            try:
+                A.model_cagir("m", "x", A.SANSUR_SEMA, 1)
+            except A.ModelHatasi:
+                pass
+        with patch.object(A.subprocess, "Popen", ReceiptAgy):
+            A.model_cagir("m", "x", A.CEVIRI_SEMA, 1)
+    finally:
+        A.RECEIPT[:] = [None, ""]
+    mk = [_j.loads(x) for x in (td / "receipts.jsonl").read_text(encoding="utf-8").splitlines()]
+    kontrol("Receipts: failed and successful calls are separate lines with stage, backend and session id",
+            [(m["stage"], m["status"], m["session"]) for m in mk] == [("warnings", "ERROR", None), ("translate", "SUCCESS", "abc-123")]
+            and mk[1]["usage"]["input_tokens"] == 10 and mk[1]["episode"] == "S01E02" and mk[1]["backend"] == "agy"
+            and "time" in mk[1] and "seconds" in mk[1])
+    oz = A.receipt_summary(td / "receipts.jsonl", "S01E02")
+    kontrol("Receipt summary: calls, failures and token totals", oz["calls"] == 2 and oz["failed"] == 1 and oz["input_tokens"] == 10
+            and A.receipt_summary(td / "receipts.jsonl", "S01E03")["calls"] == 0)
+    kontrol("Receipt summary skips calls of a job archived by --redo",
+            A.receipt_summary(td / "receipts.jsonl", "S01E02", A.time.time() + 3600)["calls"] == 0
+            and A.receipt_summary(td / "receipts.jsonl", "S01E02", A.time.time() - 3600)["calls"] == 2)
+    class UnknownAgy(SahteP2):
+        def communicate(s, *a, **k):
+            return '{"event": "step_update", "step_update": {}}', ""
+    A.RECEIPT[:] = [td / "r2.jsonl", "S01E01"]
+    try:
+        with patch.object(A.subprocess, "Popen", UnknownAgy), patch.object(A.time, "sleep") as sleep:
+            try:
+                A.model_cagir("m", "x", {}, 1, deneme=1); unknown = ""
+            except A.ModelHatasi as e:
+                unknown = str(e)
+    finally:
+        A.RECEIPT[:] = [None, ""]
+    mk2 = _j.loads((td / "r2.jsonl").read_text(encoding="utf-8"))
+    kontrol("Unrecognized agy reply is an explicit error in the receipt, without waiting",
+            "unrecognized reply" in unknown and mk2["status"] == "ERROR" and "unrecognized" in mk2["error"] and not sleep.called)
+    with patch.object(A, "_agy", side_effect=A.ModelHatasi("unknown model: x")):
+        A.RECEIPT[:] = [td / "r3.jsonl", "S01E01"]
+        try:
+            try:
+                A.model_cagir("m", "x", A.KAPI_SEMA, 1)
+            except A.ModelHatasi:
+                pass
+        finally:
+            A.RECEIPT[:] = [None, ""]
+    kontrol("Configuration failures are receipted under their stage", _j.loads((td / "r3.jsonl").read_text())["stage"] == "gate")
+
+# Elapsed minutes survive reruns; an interrupted run counts until its last model call.
+with tempfile.TemporaryDirectory() as td:
+    is_dir = Path(td) / "Seri" / "S01E01"; is_dir.mkdir(parents=True)
+    A.run_start(is_dir)
+    k = A.joku(is_dir / "runs.json"); k[0]["start"] -= 600; A.jyaz(is_dir / "runs.json", k)
+    A.receipt_write("m", "translate", 0, A.time.time(), "ERROR", None, "503")
+    first = A.joku(is_dir / "runs.json")[0]
+    A.run_start(is_dir)
+    k = A.joku(is_dir / "runs.json"); k[1]["start"] -= 120; A.jyaz(is_dir / "runs.json", k)
+    total = A.run_minutes(is_dir)
+    kontrol(f"Run minutes include earlier runs ({total})", 9.9 <= total <= 12.2 and len(A.joku(is_dir / "runs.json")) == 2
+            and first["end"] - first["start"] >= 599)
+    A.RUN_FILE[0] = None; A.RECEIPT[:] = [None, ""]
+
+# Professional target-track rule (scoring off by default; downloaded files ignored).
+kontrol("Human translation scoring is off by default", A.VARSAYILAN["human_scoring"] is False)
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    seen = []
+    def fake_candidates(video, sezon, no, is_dir, dosyalar=True):
+        seen.append(dosyalar)
+        return [{"source": str(td / "g.ass"), "kind": "embedded track", "track": 3, "title": titles.pop(0)}]
+    with patch.object(A, "insan_adaylari", side_effect=fake_candidates), \
+            patch.object(A, "insan_degerlendir", side_effect=AssertionError("scored")):
+        a0 = {"human_scoring": False}
+        titles = ["Turkish (Netflix)"]; s1 = A.insan_secimi(a0, Path("/x/Show - 01.mkv"), 1, 1, [], "", td)
+        titles = ["Turkish"]; s2 = A.insan_secimi(a0, Path("/x/Show.S01E01.1080p.NF.WEB-DL.mkv"), 1, 1, [], "", td)
+        titles = ["[AnimeSub] Turkish"]; s3 = A.insan_secimi(a0, Path("/x/Show - 01 [1080p].mkv"), 1, 1, [], "", td)
+        titles = ["Crunchy"]; s4 = A.insan_secimi(a0, Path("/x/CRAZY Show - 01.mkv"), 1, 1, [], "", td)
+        titles = ["[Fansub] Turkish"]; s5 = A.insan_secimi(a0, Path("/x/Show.S01E01.1080p.NF.WEB-DL.mkv"), 1, 1, [], "", td)
+        titles = [""]; s6 = A.insan_secimi(a0, Path("/x/[Group] Show - 01 (CR 1080p).mkv"), 1, 1, [], "", td)
+        titles = ["tur", "", "Turkish (Crunchyroll)"]
+        s7 = A.insan_secimi(a0, Path("/x/Show - 01 [Crunchyroll WEB-DL].mkv"), 1, 1, [], "", td)
+        s8 = A.insan_secimi(a0, Path("/x/Show - 01 [HIDIVE].mkv"), 1, 1, [], "", td)
+        s9 = A.insan_secimi(a0, Path("/x/Show - 01.mkv"), 1, 1, [], "", td)
+    kontrol("Platform tag in the track title is delivered without translation, offset 0",
+            s1 and s1["use"] and s1["professional"] == "Netflix" and s1["offset_seconds"] == 0.0 and s1["ass"] == str(td / "g.ass"))
+    kontrol("NF tag in the filename counts for a neutral track title", s2 and s2["professional"] == "NF")
+    kontrol("Embedded track without a platform tag does not stop translation", s3 is None)
+    kontrol("Short codes do not match inside words or in lowercase", s4 is None)
+    kontrol("A named fansub track is not professional because of a filename tag", s5 is None)
+    kontrol("CR short code alone is not professional", s6 is None)
+    kontrol("Crunchyroll/HIDIVE in a filename do not count; in a track title they do",
+            s7 is None and s8 is None and s9 and s9["professional"] == "Crunchyroll")
+    kontrol("Scoring off: downloaded files are not inspected and nothing is scored",
+            seen == [False] * 9 and A.joku(td / "human" / "selection.json")["rule"] == "professional track")
+A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "tr", target_name="Türkçe")
+kontrol("Neutral track titles include native name, English name and codes",
+        all(A.notr_baslik(t) for t in ("", " Türkçe ", "turkce", "Turkish", "TUR", "tr")) and not A.notr_baslik("Türkçe (fansub)"))
+A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "tr")
+
+# Line duration: translators see it; unreadably short dialogue is extended without touching the next line.
+kontrol("Translation line carries its duration", A._satir({"id": "4", "kind": "dialogue", "style": "D", "text": "Hi", "start": 1.0, "end": 2.25}) == "4 [dialogue|D|1.2 s]: Hi")
+_s = A.Ass(_bos_ass + "Dialogue: 0,0:00:01.00,0:00:01.80,D,,0,0,0,,Go!\n"
+              "Dialogue: 0,0:00:05.00,0:00:05.50,D,,0,0,0,,Wait.\n"
+              "Dialogue: 0,0:00:05.90,0:00:08.00,D,,0,0,0,,Fine.\n"
+              "Dialogue: 0,0:00:09.00,0:00:09.30,Sign,,0,0,0,,EXIT\n")
+_b, _e = A.birimleri_cikar(_s)
+_kinds = {b["id"]: ("sign" if b["style"] == "Sign" else "dialogue") for b in _b}
+_new = {o["index"]: m for o, m in zip(_s.olaylar, ["Haydi, hemen şimdi gidiyoruz buradan, vakit kalmadı artık!", "Bekle, bir dakika dur orada.", "Peki.", "ÇIKIŞ KAPISI BURADA"])}
+_n = A.sure_uzat(_s, _e, _kinds, _new, 17, 1.5)
+_ends = [_s.son(o) for o in _s.olaylar]
+kontrol(f"Duration extension: at most 1.5 s, never into the next line, sufficient lines and signs untouched ({_ends}, {_n})",
+        _n == 2 and abs(_ends[0] - 3.3) < 0.011 and abs(_ends[1] - 5.85) < 0.011 and _ends[2] == 8.0 and abs(_ends[3] - 9.3) < 0.011
+        and [_s.bas(o) for o in _s.olaylar] == [1.0, 5.0, 5.9, 9.0])
+_s2 = A.Ass(_bos_ass + "Dialogue: 0,0:00:01.00,0:00:01.80,D,,0,0,0,,Go!\n" "Dialogue: 0,0:00:01.50,0:00:04.00,D,,0,0,0,,No.\n"
+               "Dialogue: 0,0:00:04.00,0:00:06.00,D,,0,0,0,,Hm.\n")
+_b2, _e2 = A.birimleri_cikar(_s2)
+_n2 = A.sure_uzat(_s2, _e2, {b["id"]: "dialogue" for b in _b2}, {o["index"]: "Haydi, hemen şimdi gidiyoruz buradan, vakit kalmadı artık!" for o in _s2.olaylar}, 17, 1.5)
+kontrol("Duration extension: an overlap starting inside the line is no limit",
+        abs(_s2.son(_s2.olaylar[0]) - 3.3) < 0.011 and _s2.son(_s2.olaylar[1]) == 4.0 and _n2 == 2)
+kontrol("Duration extension off (cps 0) changes nothing", A.sure_uzat(A.Ass(_bos_ass + "Dialogue: 0,0:00:01.00,0:00:01.10,D,,0,0,0,,Go!\n"), _e, _kinds, _new, 0, 1.5) == 0)
+
+# Meaning gate for reviewer corrections (model faked).
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    cands = [{"id": "1", "category": "meaning_error", "source": "I really mean it.", "before": "Gerçekten ciddiyim.", "after": "Ciddiyim.", "reason": "x"},
+             {"id": "2", "category": "reversed_negation", "source": "I can't go.", "before": "Gidebilirim.", "after": "Gidemem.", "reason": "y"},
+             {"id": "3", "category": "inconsistent_term", "source": "Rose Mansion", "before": "Gül Evi", "after": "Gül Konağı", "reason": "z"}]
+    prompts = []
+    def fake_gate(model, prompt, schema, timeout):
+        prompts.append((model, prompt, schema))
+        return {"decisions": [{"id": "1", "decision": "reject", "reason": "'really' dropped"}, {"id": "2", "decision": "accept", "reason": "ok"}]}, {"input_tokens": 5}
+    ga = {"model_gate": "mk", "model_review": "mi", "timeout_seconds": 1}
+    with patch.object(A, "model_cagir", side_effect=fake_gate):
+        g1 = A.anlam_kapisi(ga, cands, "", td)
+        g2 = A.anlam_kapisi(ga, cands, "", td)
+    kontrol("Meaning gate rejects meaning loss and undecided corrections, passes the right one",
+            g1["rejected"] == {"1": "'really' dropped", "3": "no gate decision"} and g1["status"] == "done")
+    kontrol("Meaning gate prompt carries SOURCE/BEFORE/AFTER, one call, cached and not repeated",
+            len(prompts) == 1 and prompts[0][0] == "mk" and prompts[0][2] is A.KAPI_SEMA and "BEFORE: Gerçekten ciddiyim." in prompts[0][1]
+            and g2 == A.joku(td / "meaning-gate.json"))
+    with patch.object(A, "model_cagir", side_effect=A.ModelHatasi("503")):
+        try:
+            A.anlam_kapisi({"model_review": "mi", "timeout_seconds": 1}, cands, "", td / "new"); g3 = "continued"
+        except A.BolumHatasi as e:
+            g3 = str(e)
+    kontrol("Meaning gate model error stops the episode and writes nothing",
+            "meaning gate unavailable" in g3 and not (td / "new" / "meaning-gate.json").exists())
+    def filtered(model, prompt, schema, timeout):
+        if "Gidemem" in prompt:
+            raise A.GuvenlikEngeli("blocked by content safety filters")
+        return {"decisions": [{"id": i, "decision": "accept", "reason": "-"} for i in ("1", "2", "3") if f"\n{i} [" in "\n" + prompt.split("\n\n", 2)[-1]]}, {}
+    with patch.object(A, "model_cagir", side_effect=filtered):
+        g4 = A.anlam_kapisi({"model_review": "mi", "timeout_seconds": 1}, cands, "", td / "f")
+    with patch.object(A, "model_cagir", side_effect=fake_gate):
+        g5 = A.anlam_kapisi(ga, [dict(cands[0], after="Gerçekten ciddiyim, valla.")] + cands[1:], "", td / "f")
+    kontrol(f"Meaning gate splits on content safety and rejects only the blocked one ({g4['rejected']})",
+            g4["rejected"] == {"2": "not checked: blocked by content safety"} and g4["blocked"] == ["2"])
+    kontrol("Meaning gate cache is not reused when corrections change", g5["rejected"].get("1") == "'really' dropped")
+    kontrol("Meaning gate makes no call without corrections", A.anlam_kapisi({}, [], "", td / "empty")["status"] == "not needed")
+kontrol("Gate model defaults to the review model", A.configure(dict(A.VARSAYILAN, backend="agy", model="m", model_review="r"), "en", "tr") is None
+        and A.BACKEND_CONFIG["model_gate"] == "r")
+A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "tr")
+
+# Episode integration (model faked): gate, same-unit dedupe, duration extension, receipt label.
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    a = dict(A.VARSAYILAN, backend="agy", model="fake")
+    A.configure(a, "en", "tr")
+    a.update(A.BACKEND_CONFIG)
+    a.update({k: td / k for k in ("work_dir", "jobs_dir", "library_dir", "watch")})
+    a.update(content_warnings=False, level_report=False, break_chapters=False)
+    is_dir = a["work_dir"] / "Seri" / "S01E01"; is_dir.mkdir(parents=True)
+    seri = is_dir.parent / "series.md"; seri.write_text("series", encoding="utf-8")
+    (is_dir / "source.ass").write_text(_bos_ass + "Dialogue: 0,0:00:01.00,0:00:01.80,D,,0,0,0,,I really mean it, you know.\n"
+                                       "Dialogue: 0,0:00:05.00,0:00:07.00,D,,0,0,0,,I can't go there today.\n"
+                                       "Dialogue: 0,0:00:10.00,0:00:12.00,D,,0,0,0,,Rose Mansion is far away.\n"
+                                       "Dialogue: 0,0:00:20.00,0:00:21.80,D,,0,0,0,,Wait, we should get going now.\n", encoding="utf-8")
+    calls = []
+    def route(model, prompt, schema, timeout, **k):
+        calls.append((schema, A.RECEIPT[1], prompt))
+        if schema is A.BAGLAM_SEMA:
+            return {x: [] for x in A.BAGLAM_SEMA["required"]}, {}
+        if schema is A.CEVIRI_SEMA:
+            return {"translations": {"1": "Haydi, hemen şimdi gidiyoruz buradan, vakit kalmadı artık!", "2": "Oraya bugün gidebilirim.",
+                                     "3": "Gül Evi çok uzakta.", "4": "Bekle, artık gerçekten yola çıkmalıyız."}}, {}
+        if schema is A.INCELEME_SEMA:
+            return {"corrections": [{"id": "2", "category": "reversed_negation", "new": "Oraya bugün gidemem.", "reason": "a"},
+                                    {"id": "2", "category": "reversed_negation", "new": "Bugün oraya gidemem.", "reason": "b"},
+                                    {"id": "3", "category": "inconsistent_term", "new": "Gül Konağı çok uzakta.", "reason": "c"}],
+                    "last_reviewed_id": "3"}, {}
+        if schema is A.KAPI_SEMA:
+            return {"decisions": [{"id": "2", "decision": "accept", "reason": "-"}, {"id": "3", "decision": "reject", "reason": "taste"}]}, {}
+        raise AssertionError("unexpected call")
+    with patch.object(A, "model_cagir", side_effect=route), patch.object(A, "HATA_DOSYASI", None):
+        k = A.bolum_isle(a, "Seri", 1, 1, None, None, "", seri, False, None)
+    final = (is_dir / "final.ass").read_text(encoding="utf-8")
+    dz = A.joku(is_dir / "corrections.json")
+    gate_prompts = [p for s, _, p in calls if s is A.KAPI_SEMA]
+    kontrol("Integration: two corrections of one unit dedupe, gate sees it once, the last one is applied",
+            len(gate_prompts) == 1 and gate_prompts[0].count("\n2 [") == 1 and "Bugün oraya gidemem." in final and k["correction_count"] == 1
+            and any(r["rejected"].startswith("superseded") for r in dz["rejected"]))
+    kontrol("Integration: a correction rejected by the gate never reaches the subtitles",
+            "Gül Evi çok uzakta." in final and "Gül Konağı" not in final and any(r["rejected"].startswith("meaning gate") for r in dz["rejected"])
+            and k["meaning_gate"] == {"status": "done", "rejected": 1})
+    kontrol("Integration: an unreadably short line is extended in final.ass", "0:00:01.00,0:00:03.30,D" in final and k["extended_lines"] == 2)
+    kontrol(f"Integration: the fast-line counter sees the extended duration ({k['fast_lines']})",
+            k["fast_lines"] == 1 and "0:00:20.00,0:00:22.29,D" in final)
+    kontrol("Integration: the record lists every role model", set(k["models"]) == {"model_" + r for r in A.ROLES})
+    kontrol("Integration: every call carries the episode label; record has receipt totals and runs",
+            {e for _, e, _ in calls} == {"S01E01"} and k["receipts"]["file"].endswith("receipts.jsonl") and k["minutes"] >= 0
+            and (a["jobs_dir"] / "Seri" / "S01E01" / "runs.json").exists())
+    A.RECEIPT[:] = [None, ""]; A.RUN_FILE[0] = None
+
+# Professional track without a source track: delivered, breaks and level report skipped.
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    a = dict(A.VARSAYILAN, backend="agy", model="fake")
+    A.configure(a, "en", "tr"); a.update(A.BACKEND_CONFIG)
+    a.update({k: td / k for k in ("work_dir", "jobs_dir", "library_dir", "watch")})
+    a.update(break_chapters=True, level_report=True)
+    is_dir = a["work_dir"] / "Seri" / "S01E01"; (is_dir / "human").mkdir(parents=True)
+    pro = is_dir / "human" / "embedded-3.ass"; pro.write_text(_bos_ass + "Dialogue: 0,0:00:01.00,0:00:02.00,D,,0,0,0,,Merhaba\n", encoding="utf-8")
+    secim = {"source": str(pro), "kind": "embedded track", "track": 3, "ass": str(pro), "offset_seconds": 0.0, "score": None,
+             "professional": "NF", "use": True}
+    with patch.object(A, "video_fontlari", return_value={}), patch.object(A, "ogrenme_raporu") as og, \
+            patch.object(A, "durak_adaylari") as dur, patch.object(A, "paketle", return_value={"file": "x"}):
+        k = A.insan_teslim(a, "Seri", 1, 1, td / "v.mkv", secim, None, True)
+    kontrol("Human delivery record lists every role model", set(k["models"]) == {"model_" + r for r in A.ROLES})
+    kontrol("Professional track is delivered without source subtitles; breaks and level report skipped",
+            k["human"]["professional"] == "NF" and not og.called and not dur.called and (a["jobs_dir"] / "Seri" / "S01E01" / "final.ass").exists())
+    A.RECEIPT[:] = [None, ""]; A.RUN_FILE[0] = None
+
+# Folder settings override the output_dir layout; a replacement guide can be configured.
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    cfg = td / "c.json"
+    cfg.write_text(_j.dumps({"output_dir": str(td / "out"), "work_dir": str(td / "w"), "watch_dir": str(td / "watch")}), encoding="utf-8")
+    s_ = A.ayarlar(str(cfg))
+    kontrol("Explicit folder settings override output_dir", s_["work_dir"] == td / "w" and s_["watch"] == td / "watch"
+            and s_["jobs_dir"] == td / "out" / "jobs" and s_["library_dir"] == td / "out" / "library")
+
+A.configure(dict(A.VARSAYILAN, backend="agy", model="fake", labels={"warning": "W {reasons} {until}"}), "en", "tr")
+_ev, _ = A.uyari_olaylari([{"id": "1", "start": 60.0, "end": 62.0}], [{"first_id": "1", "last_id": "1", "reason": "r"}], ["start", "end", "style", "text"])
+kontrol("Viewer-facing labels are configurable per key", _ev and _ev[0].endswith(",W r 1:07") and A.LABELS["break"] == A.LABELS_DEFAULT["break"])
+A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "tr")
+kontrol("Labels return to defaults on reconfigure", A.LABELS == A.LABELS_DEFAULT)
+
 # Scan every shipped text artifact, excluding documented local-only coordination files.
 root=Path(__file__).resolve().parent
 local_names={"CLAUDE.md","DURUM.md","KARARLAR.md"}
@@ -1132,8 +1389,12 @@ kontrol("Repository URL exemption covers exactly the account",
 kontrol("Other forbidden text is still detected inside LICENSE",
         bool(trace_findings("LICENSE", "Copyright (c) 2026 " + holder + "\n" + needles[1])))
 leaks=[]
+# Nested repositories (a local private layer, for example) are not part of this repository and are skipped.
+nested_repos=[d for d in root.rglob(".git") if d.parent != root]
 for path in root.rglob("*"):
     relative=path.relative_to(root)
+    if any(n.parent in path.parents for n in nested_repos):
+        continue
     if not path.is_file() or any(part.startswith(".") or part in ("_yerel","__pycache__") for part in relative.parts) or path.name in local_names:
         continue
     if path.suffix.lower() not in (".py",".md",".json",".txt") and path.name not in ("LICENSE",):
