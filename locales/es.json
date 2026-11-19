@@ -13,7 +13,7 @@
   "report": {
     "title": "Nivel de idioma — {episode}",
     "confidence": "confianza",
-    "reading_load": "Carga de lectura: {wpm} palabras/min; mediana {median} caracteres/s, 10 % más rápido {p90}+; líneas rápidas {fast} %. {unique} palabras únicas.",
+    "reading_load": "Carga de lectura: {wpm} palabras/min; mediana {median} caracteres/s, el 10 % más rápido {p90}+; líneas rápidas {fast} %. {unique} palabras únicas.",
     "difficulties": "Dificultades",
     "expressions": "Expresiones útiles",
     "expression_columns": [
@@ -24,12 +24,12 @@
       "Utilidad"
     ],
     "evidence": "Evidencia del nivel",
-    "note": "Evaluación aproximada del contenido; no es una prueba personal ni un certificado CEFR.",
+    "note": "Evaluación aproximada del contenido; no es una prueba personal ni un certificado MCER.",
     "profile": "Perfil",
     "season_title": "{title} — Evaluación de lectura de los subtítulos originales",
     "season_columns": [
       "Episodio",
-      "CEFR",
+      "MCER",
       "Idoneidad",
       "Palabras/min",
       "Líneas rápidas (caracteres/s, 10 % sup.)",

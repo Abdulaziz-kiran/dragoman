@@ -1,7 +1,7 @@
 {
   "native_name": "العربية",
   "labels": {
-    "warning": "⚠ مشهد حساس محتمل ({reasons}) → {until}",
+    "warning": "⚠ مشهد حساس محتمل ({reasons}) ← {until}",
     "break": "⏸ نقطة استراحة {n}",
     "start": "البداية",
     "human_track": "{language} (ترجمة بشرية)",
@@ -25,7 +25,7 @@
     ],
     "evidence": "أدلة المستوى",
     "note": "تقييم تقريبي للمحتوى؛ وليس اختبارًا شخصيًا أو شهادة CEFR.",
-    "profile": "ملف المتعلم",
+    "profile": "الملف",
     "season_title": "{title} — تقييم قراءة الترجمة المصدرية",
     "season_columns": [
       "الحلقة",

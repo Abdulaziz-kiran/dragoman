@@ -1,7 +1,7 @@
 {
   "native_name": "한국어",
   "labels": {
-    "warning": "⚠ 민감한 장면 가능 ({reasons}) → {until}",
+    "warning": "⚠ 민감한 장면일 수 있음 ({reasons}) → {until}",
     "break": "⏸ 휴식 지점 {n}",
     "start": "시작",
     "human_track": "{language} (사람 번역)",

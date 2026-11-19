@@ -24,13 +24,13 @@
       "Utilité"
     ],
     "evidence": "Indices du niveau",
-    "note": "Évaluation approximative du contenu ; ne constitue ni un test personnel ni un certificat CEFR.",
+    "note": "Évaluation approximative du contenu ; ne constitue ni un test personnel ni un certificat CECRL.",
     "profile": "Profil",
     "season_title": "{title} — Évaluation de lecture des sous-titres source",
     "season_columns": [
       "Épisode",
-      "CEFR",
-      "Accessibilité",
+      "CECRL",
+      "Adéquation",
       "Mots/minute",
       "Lignes rapides (caractères/seconde, top 10 %)",
       "Résumé"
