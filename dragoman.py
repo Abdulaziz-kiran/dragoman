@@ -1655,7 +1655,7 @@ CEVIRI_SEMA = {"type": "object", "properties": {
     "translations": {"type": "object", "additionalProperties": {"type": "string"}}}, "required": ["translations"]}
 CEVIRI_NOT_SEMA = {"type": "object", "properties": {**CEVIRI_SEMA["properties"], "notes": {"type": "array", "items": {
     "type": "object", "properties": {"id": {"type": "string"}, "text": {"type": "string"}}, "required": ["id", "text"]}}},
-    "required": ["translations", "notes"]}
+    "required": ["translations"]}
 NOT_SINIRI, NOT_UZUNLUK = 4, 80  # translator notes: at most per episode, characters per note
 
 KATEGORILER = ["meaning_error", "reversed_negation", "omission_or_addition", "speaker_or_register", "inconsistent_term",

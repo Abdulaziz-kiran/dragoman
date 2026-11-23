@@ -2133,6 +2133,11 @@ with patch.object(A, "_cli", side_effect=fake_cli), patch.object(A, "HATA_DOSYAS
 kontrol("Codex strict schema: every object has properties and closed keys; a reply with notes validates",
         strict_ok(strict) and valid and strict["required"] == ["translations", "notes"]
         and strict["properties"]["translations"]["required"] == ["1", "2"] and A.stage_of(A.CEVIRI_NOT_SEMA) == "translate")
+try:
+    A._validate({"translations": {"1": "Merhaba."}}, A.CEVIRI_NOT_SEMA); _notsuz = True
+except A.ModelHatasi:
+    _notsuz = False
+kontrol("Translator notes on: a reply without `notes` is still valid (no chunk retry)", _notsuz)
 A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "tr")
 
 # Notes survive an interrupted chunk.
