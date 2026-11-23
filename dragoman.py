@@ -255,7 +255,8 @@ def _kota_bekle(model: str, metin_ipucu: bool = False, beklenen: float = 0.0) ->
     call (`beklenen` already waited) is capped by max_quota_wait_seconds, beyond which the call fails with a clear error."""
     model = model.lower()
     grup_adi = "Gemini 4 Argon" if "argon" in model else ("Gemini Models" if "gemini" in model else "Claude and GPT models")
-    sinir = float(BACKEND_CONFIG.get("max_quota_wait_seconds") or 3600)
+    sinir = BACKEND_CONFIG.get("max_quota_wait_seconds")
+    sinir = 3600.0 if sinir is None else float(sinir)
     mesaj = None
     with _KOTA_KILIDI:
         bekle = _KOTA_BITIS.get(grup_adi, 0) - time.time()
@@ -280,7 +281,7 @@ def _kota_bekle(model: str, metin_ipucu: bool = False, beklenen: float = 0.0) ->
                 if metin_ipucu:
                     bekle = 900
                     mesaj = f"Could not read quota table ({e}); error indicates quota exhaustion; waiting 15 minutes."
-            if bekle is not None and beklenen + bekle <= sinir:
+            if bekle is not None:
                 _KOTA_BITIS[grup_adi] = time.time() + bekle
         else:
             mesaj = f"Quota exhausted ({grup_adi}); another request is already waiting for the reset ({bekle/60:.0f} minutes)."
@@ -643,6 +644,27 @@ class Ass:
     def bas(self, o): return sure_sn(o["fields"][self.i_bas])
     def son(self, o): return sure_sn(o["fields"][self.i_son])
 
+    def stil_satiri(self, ad: str, degerler: dict) -> str | None:
+        """A Style line for an added overlay, laid out by this file's Styles Format line (None without one)."""
+        bolum, bicim, ssa = "", None, False
+        for s in self.satirlar:
+            st = s.strip()
+            if st.startswith("[") and st.endswith("]"):
+                bolum = st.lower()
+            elif bolum in ("[v4+ styles]", "[v4 styles]") and st.lower().startswith("format:"):
+                bicim, ssa = [x.strip().lower() for x in st[7:].split(",")], bolum == "[v4 styles]"
+                break
+        if not bicim:
+            return None
+        hazir = {"name": ad, "fontname": "Arial", "fontsize": 20, "primarycolour": "&H00FFFFFF", "secondarycolour": "&H000000FF",
+                 "outlinecolour": "&H00000000", "tertiarycolour": "&H00000000", "backcolour": "&H80000000", "bold": 0, "italic": 0,
+                 "underline": 0, "strikeout": 0, "scalex": 100, "scaley": 100, "spacing": 0, "angle": 0, "borderstyle": 1,
+                 "outline": 1, "shadow": 0, "alignment": 2, "marginl": 20, "marginr": 20, "marginv": 10, "alphalevel": 0,
+                 "encoding": 1, **degerler}
+        if ssa:  # SSA alignment numbering: 2 bottom centre, 6 top centre
+            hazir["alignment"] = {8: 6, 2: 2}.get(hazir["alignment"], hazir["alignment"])
+        return "Style: " + ",".join(str(hazir.get(k, 0)) for k in bicim)
+
     def play_res_y(self) -> int:
         for s in self.satirlar:
             m = re.match(r"\s*PlayResY\s*:\s*(\d+)", s)
@@ -731,11 +753,13 @@ def birimleri_cikar(ass: Ass) -> tuple[list[dict], dict[int, dict]]:
         if anahtar_k not in birimler:
             birimler[anahtar_k] = {"id": str(len(birimler) + 1), "text": anahtar, "style": stil,
                                    "kind": tur, "start": ass.bas(o), "end": ass.son(o)}
+        elif tur == "dialogue":
+            birimler[anahtar_k]["end"] = max(birimler[anahtar_k]["end"], ass.son(o))
         esleme[o["index"]] = {"id": birimler[anahtar_k]["id"], "parts": parcalar, "nonempty": dolu, "merged": birlesik}
     return list(birimler.values()), esleme
 
 
-KONUSMACI = re.compile(r"\s*[-‐–—]")
+KONUSMACI = re.compile(r"(?:\s|⟦\d+⟧)*[-‐–—]")
 
 
 def satir_kir(metin: str, sinir: int) -> str:
@@ -743,18 +767,20 @@ def satir_kir(metin: str, sinir: int) -> str:
         satirlar = metin.split("\\N")
         if all(columns(line) <= sinir for line in satirlar):
             return metin
-        if len(satirlar) > 1 and all(KONUSMACI.match(line) for line in satirlar[1:]):
+        if len(satirlar) > 1 and all(KONUSMACI.match(line) for line in satirlar):
             # "- A\N- B": one speaker per line; wrap each speaker's part separately and keep the dash structure.
             return "\\N".join(satir_kir(line, sinir) for line in satirlar)
         metin = " ".join(line.strip() for line in satirlar)
     if columns(metin) <= sinir:
         return metin
     # A space before closing punctuation (French " ?", " !", " :", " ;", " »") or after "«" is not a break point.
+    onceki = lambda i: ISARET.sub("", metin[:i])[-1:]  # neighbours are read through zero-width markers
+    sonraki = lambda i: ISARET.sub("", metin[i + 1:])[:1]
     bosluklar = [m.start() for m in re.finditer(" ", metin)
-                 if metin[m.start() + 1:m.start() + 2] not in tuple("?!:;»") and metin[m.start() - 1:m.start()] != "«"]
+                 if (sonraki(m.start()) not in tuple("?!:;»") or not sonraki(m.start())) and onceki(m.start()) != "«"]
     orta = columns(metin) / 2
     if bosluklar:
-        i = min(bosluklar, key=lambda i: abs(columns(metin[:i]) - orta) - (6 if metin[i-1] in ",.;:!?…" else 0))
+        i = min(bosluklar, key=lambda i: abs(columns(metin[:i]) - orta) - (6 if onceki(i) and onceki(i) in ",.;:!?…" else 0))
         return metin[:i] + "\\N" + metin[i+1:]
     # Preserve whole markers and combining sequences when wrapping unspaced scripts.
     units = re.findall(r"⟦\d+⟧|.[\u0300-\u036f]*", metin)
@@ -784,15 +810,27 @@ def olaya_yerlestir(ceviri: str, e: dict, tur: str, sinir: int) -> tuple[str, bo
     else:
         # Wrapping measures visible text only (markers are zero-width), so a break never moves a marker.
         if ISARET.findall(ceviri) == [f"⟦{k}⟧" for k in range(1, len(dolu))]:
-            bolumler = ISARET.split(kir(ceviri))
+            # A source break between two tags ({\b0}\N{\i1}) stays when every line fits; otherwise it becomes a space and
+            # the line is wrapped once, never twice.
+            ara = [i for i, p in enumerate(parcalar) if i not in dolu and not p.startswith("{") and "\\N" in p]
+            kirilmis = kir(ceviri)
+            if ara and tur == "dialogue":
+                bolumler = ISARET.split(ceviri)
+                gorunen = "".join(bolumler[dolu.index(i)] if i in dolu else ("" if p.startswith("{") else p) for i, p in enumerate(parcalar))
+                if all(columns(line) <= sinir for line in gorunen.split("\\N")):
+                    kirilmis = ceviri
+                else:
+                    for i in ara:
+                        parcalar[i] = re.sub(r"\s*\\N\s*", " ", parcalar[i])
+            bolumler = ISARET.split(kirilmis)
             for k, i in enumerate(dolu):
                 parcalar[i] = bolumler[k]
         else:
             uyari = True
-            duz = kir(ISARET.sub("", ceviri))
-            parcalar[dolu[0]] = duz
-            for i in dolu[1:]:
-                parcalar[i] = ""
+            parcalar[dolu[0]] = kir(ISARET.sub("", ceviri))
+            for i, p in enumerate(parcalar):
+                if i != dolu[0] and not p.startswith("{"):
+                    parcalar[i] = ""
     return "".join(parcalar), uyari
 
 
@@ -909,12 +947,19 @@ def video_fontlari(video: Path) -> dict[str, set[int]]:
 
 
 FN = re.compile(r"\\fn([^\\}]*)")
+
+
+def olay_sutunlari(bicim: list[str] | None) -> tuple[int, int, int]:
+    """Column count, style index and text index of Dialogue lines (standard ASS layout without a Format line)."""
+    if bicim and "style" in bicim and "text" in bicim:
+        return len(bicim), bicim.index("style"), bicim.index("text")
+    return 10, 3, 9
 DEKOR_STIL = re.compile(r"rune|cipher|symbol|glyph|alien", re.I)
 
 
 def font_duzelt(metin: str, kapsam: dict[str, set[int]]) -> tuple[str, list[str]]:
     satirlar = metin.split("\n")
-    bicim, stil_i, gerekli = None, {}, {}
+    bicim, stil_i, gerekli, olay_bicim = None, {}, {}, None
     fallback_files = FALLBACK_PATHS + YEDEK_DOSYALAR
     fallback_coverage = font_kapsami(fallback_files)
     fallbacks = []
@@ -930,15 +975,18 @@ def font_duzelt(metin: str, kapsam: dict[str, set[int]]) -> tuple[str, list[str]
         st = line.strip()
         if st.lower().startswith("format:") and bicim is None and "fontname" in st.lower():
             bicim = [x.strip().lower() for x in st[7:].split(",")]
+        elif st.lower().startswith("format:") and "text" in [x.strip().lower() for x in st[7:].split(",")]:
+            olay_bicim = [x.strip().lower() for x in st[7:].split(",")]
         elif st.startswith("Style:") and bicim:
             alan = st[6:].split(",")
             stil_i[alan[0].strip()] = i
         elif st.startswith("Dialogue:"):
-            parca = st[9:].split(",", 9)
-            if len(parca) == 10:
-                text = ETIKET.sub("", parca[9]).replace("\\N", " ").replace("\\n", " ").replace("\\h", " ")
+            n, si, ti = olay_sutunlari(olay_bicim)
+            parca = st[9:].split(",", n - 1)
+            if len(parca) == n:
+                text = ETIKET.sub("", parca[ti]).replace("\\N", " ").replace("\\n", " ").replace("\\h", " ")
                 harf = {c for c in text if not c.isspace()}
-                gerekli.setdefault(parca[3].strip(), set()).update(harf)
+                gerekli.setdefault(parca[si].strip(), set()).update(harf)
 
     def eksik_mi(aile, harf):
         codes = kapsam.get(aile.strip().lstrip("@").lower())
@@ -971,23 +1019,36 @@ def font_duzelt(metin: str, kapsam: dict[str, set[int]]) -> tuple[str, list[str]
                     degisen.append(f"{ad}: {alan[fi].strip()} -> {name}")
                     alan[fi] = name
                     satirlar[i] = "Style:" + ",".join(alan)
+    n, si, ti = olay_sutunlari(olay_bicim)
     for i, line in enumerate(satirlar):
         if not line.startswith("Dialogue:"):
             continue
-        parca = line.split(",", 9)
-        if len(parca) != 10:
+        parca = line.split(",", n - 1)
+        if len(parca) != n:
             continue
-        if parca[3].strip() in katla:
-            parca[9] = "".join(part if part.startswith("{") else fold_latin(part) for part in ETIKET.split(parca[9]))
-        harf = {c for c in ETIKET.sub("", parca[9]).replace("\\N", " ").replace("\\h", " ") if not c.isspace()}
-        def degis(m):
-            if harf and eksik_mi(m.group(1), harf):
-                name = replacement(m.group(1), harf)
-                if name:
-                    degisen.append(f"inline font {m.group(1)} -> {name}")
-                    return "\\fn" + name
-            return m.group(0)
-        parca[9] = FN.sub(degis, parca[9])
+        if parca[si].strip() in katla:
+            parca[ti] = "".join(part if part.startswith("{") else fold_latin(part) for part in ETIKET.split(parca[ti]))
+        parts = ETIKET.split(parca[ti])
+        for k, part in enumerate(parts):
+            if not (part.startswith("{") and FN.search(part)):
+                continue
+            # The inline font covers text up to the next \fn or \r override.
+            harf = set()
+            for q in parts[k + 1:]:
+                if q.startswith("{"):
+                    if FN.search(q) or re.search(r"\\r", q):
+                        break
+                    continue
+                harf |= {c for c in q.replace("\\N", " ").replace("\\h", " ") if not c.isspace()}
+            def degis(m, harf=harf):
+                if harf and eksik_mi(m.group(1), harf):
+                    name = replacement(m.group(1), harf)
+                    if name:
+                        degisen.append(f"inline font {m.group(1)} -> {name}")
+                        return "\\fn" + name
+                return m.group(0)
+            parts[k] = FN.sub(degis, part)
+        parca[ti] = "".join(parts)
         satirlar[i] = ",".join(parca)
     return "\n".join(satirlar), sorted(set(degisen))
 
@@ -1182,15 +1243,16 @@ def seri_hazirla(a: dict, eser: str, kaynaklar: list[tuple[str, Path]], seri_dir
     metinler = []
     for etiket, ass_yolu in kaynaklar:
         ass = Ass(ass_yolu.read_text(encoding="utf-8", errors="replace"))
-        satirlar = []
+        satirlar, son_duz = [], None
         for o in sorted(ass.olaylar, key=lambda o: ass.bas(o)):
             t = ass.metin(o)
             if CIZIM.search(t) or KARAOKE.search(t) or (SOURCE["code"] != "ja" and ATLA_STIL.search(ass.stil(o))):
                 continue
             duz = ETIKET.sub("", t).replace("\\N", " ").strip()
-            if duz and (cjk_allowed() or not CJK.search(duz)) and (not satirlar or satirlar[-1] != duz):
+            if duz and (cjk_allowed() or not CJK.search(duz)) and duz != son_duz:
                 ad = o["fields"][ass.bicim.index("name")].strip() if "name" in ass.bicim else ""
                 satirlar.append(f"{ad}: {duz}" if ad else duz)
+                son_duz = duz
         metinler.append(f"### {etiket}\n" + "\n".join(satirlar))
     aralik = f"{kaynaklar[0][0]}–{kaynaklar[-1][0]}" if len(kaynaklar) > 1 else kaynaklar[0][0]
     gorev = f"""You are the context specialist for a subtitle translation team. Write a SERIES GUIDE for "{eser}" from the supplied source subtitles. Write English Markdown, at most 2500 words. Source range: {aralik}.
@@ -1586,8 +1648,12 @@ def cevir_parca(a, no, parca, onceki, sonraki, rehber, seri, is_dir) -> dict:
         for _ in range(2):
             if not eksik:
                 break
+            sira = [b["id"] for b in parca]
+            i0, i1 = sira.index(eksik[0]["id"]), sira.index(eksik[-1]["id"])
+            bu_onceki = (list(onceki) + parca[:i0])[-6:] if i0 else onceki
+            bu_sonraki = (parca[i1 + 1:] + list(sonraki))[:4] if i1 + 1 < len(parca) else sonraki
             try:
-                ceviri, kullanim = _cevir_istek(a, eksik, onceki, sonraki, rehber, seri)
+                ceviri, kullanim = _cevir_istek(a, eksik, bu_onceki, bu_sonraki, rehber, seri)
             except GuvenlikEngeli:
                 engel = True
                 break
@@ -1619,14 +1685,14 @@ def incele_parca(a, no, parca, ceviri, rehber, seri, is_dir) -> dict:
     imza = sha(json.dumps([(b["id"], ceviri.get(b["id"])) for b in parca], ensure_ascii=False))
     if dosya.exists():
         onceki = joku(dosya)
-        # Older records have no signature: their last id must still match.
-        if onceki.get("signature", imza) == imza and str(onceki.get("last_id")) == str(parca[-1]["id"]):
+        if onceki.get("signature") == imza:  # records without a signature (older versions) are reviewed again
             return onceki
         eski = dosya.with_name(f"{dosya.stem}-stale-{time.time_ns()}.json")
         os.replace(dosya, eski)
         log(f"Review chunk {no}: saved review belongs to other units or translations; kept as {eski.name} and reviewing again.")
     sonuc = {"corrections": [], "last_reviewed_id": None, "last_id": parca[-1]["id"], "usage": [], "blocked": [], "trap": [],
              "ids": [b["id"] for b in parca], "signature": imza}
+    eksik_okuma = False
     kuyruk = [parca]
     while kuyruk:
         p = kuyruk.pop(0)
@@ -1653,9 +1719,10 @@ def incele_parca(a, no, parca, ceviri, rehber, seri, is_dir) -> dict:
                 sonuc["blocked"].append(p[0]["id"])
             continue
         sonuc["corrections"] += d; sonuc["usage"].append(kul); sonuc["last_reviewed_id"] = son
+        eksik_okuma = eksik_okuma or str(son or "") != str(p[-1]["id"])
     if sonuc["blocked"]:
         log(f"Review chunk {no}: {len(sonuc['blocked'])} units blocked by content safety.")
-    sonuc["possibly_incomplete"] = str(sonuc["last_reviewed_id"] or "") != str(parca[-1]["id"]) and not sonuc["blocked"]
+    sonuc["possibly_incomplete"] = eksik_okuma
     jyaz(dosya, sonuc)
     log(f"Review chunk {no} complete ({len(sonuc['corrections'])} corrections)."
         + (" Reviewer may not have read to the end." if sonuc["possibly_incomplete"] else ""))
@@ -1762,13 +1829,15 @@ def translation_sanity(text: str, source: str) -> bool:
 def _ass_yap(yol: Path, hedef: Path) -> Path:
     """External .ass/.ssa/.srt as a UTF-8 ASS file (encoding detected by metin_oku)."""
     hedef.parent.mkdir(parents=True, exist_ok=True)
-    gecici = hedef.with_suffix(yol.suffix.lower() + ".utf8")
+    gecici = hedef.with_name(f"{hedef.stem}.utf8{yol.suffix.lower()}")  # ffmpeg recognizes the format by extension
     gecici.write_text(metin_oku(yol), encoding="utf-8")
     if yol.suffix.lower() == ".ass":
         gecici.replace(hedef)
-    else:
+        return hedef
+    try:
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-sub_charenc", "UTF-8", "-i", str(gecici), str(hedef)], check=True)
-        gecici.unlink()
+    finally:
+        gecici.unlink(missing_ok=True)
     return hedef
 
 
@@ -1781,8 +1850,8 @@ def insan_adaylari(video: Path | None, sezon: int, no: int | None, is_dir: Path,
         if f.suffix.lower() not in (".ass", ".srt", ".ssa") or len(f.relative_to(video.parent).parts) > 3:
             continue
         ad = f"{f.parent.name}/{f.stem}"
-        m = re.search(r"[Ss](\d+)[Ee]\d+", ad)
-        if (int(m.group(1)) if m else 1) != sezon or (no is not None and bolum_no(f.stem) != no) or kismi_iz(f.stem):
+        sz = sezon_no(f.stem) or sezon_no(f.parent.name) if f.parent != video.parent else sezon_no(f.stem)
+        if (sz is not None and sz != sezon) or (no is not None and bolum_no(f.stem) != no) or kismi_iz(f.stem):
             continue
         try:
             if not target_tagged(ad):
@@ -2093,8 +2162,8 @@ def uyari_katmani(a: dict, birimler: list[dict], tarama: dict, ass: "Ass") -> tu
         return [], [], None
     ek_olaylar, kayit = uyari_olaylari(birimler, gecerli, ass.bicim)
     boyut = max(12, round(ass.play_res_y() * 0.042))
-    ek_stil = (f"Style: ContentWarning,Arial,{boyut},&H0000E5FF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,"
-               f"{max(1, boyut // 18)},0,8,20,20,{max(10, boyut // 2)},1")
+    ek_stil = ass.stil_satiri("ContentWarning", {"fontsize": boyut, "primarycolour": "&H0000E5FF", "bold": -1,
+                                                 "outline": max(1, boyut // 18), "alignment": 8, "marginv": max(10, boyut // 2)})
     return ek_olaylar, kayit, ek_stil
 
 
@@ -2374,8 +2443,10 @@ def is_arsivini_yedekle(hedef_arsiv: Path, final: Path) -> None:
 
 
 def insan_teslim(a: dict, eser: str, sezon: int, no: int | None, video: Path, secim: dict, ses: str | None, mux: bool) -> dict:
+    global HATA_DOSYASI
     etiket = f"S{sezon:02d}E{no:02d}" if no is not None else "Movie"
     is_dir = a["work_dir"] / eser / etiket
+    HATA_DOSYASI = is_dir / "errors.jsonl"
     baslangic = run_start(is_dir)
     final = is_dir / "final.ass"
     metin = ass_kaydir(Path(secim["ass"]).read_text(encoding="utf-8", errors="replace"), secim["offset_seconds"])
@@ -2420,7 +2491,7 @@ def insan_teslim(a: dict, eser: str, sezon: int, no: int | None, video: Path, se
     hedef.mkdir(parents=True, exist_ok=True)
     is_arsivini_yedekle(hedef, final)
     for f in ("source.ass", "final.ass", "record.json", "track.json", "level.json", "level.md", "breaks.json", "break-candidates.json", "runs.json",
-              "warnings.json", "warning-scan.json"):
+              "warnings.json", "warning-scan.json", "errors.jsonl"):
         if (is_dir / f).exists():
             shutil.copyfile(is_dir / f, hedef / f)
     shutil.copytree(is_dir / "human", hedef / "human", dirs_exist_ok=True)
@@ -2455,8 +2526,8 @@ def kaynagi_hazirla(is_dir: Path, video: Path | None, kaynak_ass: Path | None) -
     else:
         iz = joku(is_dir / "track.json", {})
         # A changed source subtitle would otherwise resume silently on the old one.
-        if kaynak_ass and iz and (iz.get("external_source_sha") or iz.get("external_source") is None) \
-                and iz.get("external_source_sha") != sha(kaynak_ass):
+        if kaynak_ass and iz and (iz.get("external_source_sha") != sha(kaynak_ass) if iz.get("external_source_sha")
+                                  else iz.get("external_source") != str(kaynak_ass)):
             raise BolumHatasi(f"The source subtitle differs from the one this job started with ({iz.get('external_source') or 'embedded track'}); "
                               "use --redo to archive this job and restart with the new file")
     if video and iz.get("video_size") and iz["video_size"] != video.stat().st_size:
@@ -2919,6 +2990,8 @@ def main() -> None:
         eser = x.eser or temiz_ad(girdi.parent.name if not x.film else girdi.stem)
 
     eser = klasor_adi(eser)
+    if x.sezon is not None and girdi.is_dir():
+        videolar = [(n, v) for n, v in videolar if sezon_no(v.stem) in (None, x.sezon)]
     secili = videolar
     if x.bolum:
         istenen = set()
@@ -2953,18 +3026,18 @@ def main() -> None:
                          "fix --season or the filenames")
     if x.sezon is None:
         if len(bulunan) > 1:
-            raise SystemExit(f"Input names contain several seasons ({', '.join(map(str, bulunan))}); select one with --season and --episodes")
+            raise SystemExit(f"Input names contain several seasons ({', '.join(map(str, bulunan))}); select one with --season")
         x.sezon = bulunan[0] if bulunan else 1
         if bulunan:
             log(f"Season {x.sezon} (from the input name).")
     dis = Path(os.path.expanduser(x.kaynak)).resolve() if x.kaynak else None
     if dis and len(secili) != 1:
         raise SystemExit("--source-subtitle requires one video (select with --episodes)")
-    if dis and not x.ocr_kabul and not x.duzey:
-        ham = metin_oku(dis)
+    for dis_ in (d for d in (dis, kaynak_ass) if d and not x.ocr_kabul and not x.duzey):
+        ham = metin_oku(dis_)
         iz_ = len(re.findall(r"'[^'\"\n]{1,60}\"", ham)) + (20 if "pysubs2" in ham else 0)
         if iz_ >= 20:
-            raise SystemExit(f"{dis.name} has raw OCR artifacts (mismatched quotes or letters); errors may propagate into the translation. "
+            raise SystemExit(f"{dis_.name} has raw OCR artifacts (mismatched quotes or letters); errors may propagate into the translation. "
                              "Clean the source first, or explicitly accept with --accept-ocr.")
     isler = ([(x.no, None, kaynak_ass)] if kaynak_ass else []) + [(None if x.film else n, v, dis) for n, v in secili]
     requested_count = len(isler)
@@ -3060,13 +3133,15 @@ def main() -> None:
                 except (SystemExit, subprocess.CalledProcessError) as e:
                     log(f"Series source skipped {v.name}: {e}")
                     continue
-            kaynaklar.append((etiket, hedef))
+            if etiket not in dict(kaynaklar):  # one entry per episode (a video and a series-source file may share it)
+                kaynaklar.append((etiket, hedef))
         girdiler = []
         if kaynak_ass:
             girdiler.append((f"S{x.sezon:02d}E{x.no:02d}" if x.no else "source", kaynak_ass))
         if dis:
             girdiler.append((f"S{x.sezon:02d}E{secili[0][0]:02d}" if secili[0][0] is not None and not x.film else "source", dis))
-        for source_label, source_path in girdiler:  # read with encoding detection, converted to UTF-8 ASS
+        for source_label, source_path in girdiler:  # read with encoding detection, converted to UTF-8 ASS; replaces a same-label entry
+            kaynaklar = [k for k in kaynaklar if k[0] != source_label]
             kaynaklar.append((source_label, _ass_yap(source_path, seri_dir / "series-source" / f"{source_label}.input.ass")))
         if not kaynaklar:
             raise SystemExit("No subtitles available for series guide")
@@ -3094,8 +3169,10 @@ def main() -> None:
     summary_lines.append(f"\nSUMMARY — {eser}: requested {requested_count} episodes, delivered {len(sonuclar)}, failed {len(basarisiz)}")
     for k in sonuclar:
         if k.get("source_type") == "human translation":
-            summary_lines.append(f"- {k['episode']}: human translation used ({k['human'].get('professional') or 'score ' + str(k['human']['score'])}) · {k['library_dir']}"
-                  + (f" · {k['package']['file']}" if k.get("package") else ""))
+            summary_lines.append(f"- {k['episode']}: human translation used ({k['human'].get('professional') or 'score ' + str(k['human']['score'])}), "
+                  f"{k.get('warning_count', 0)} content warnings · {k['library_dir']}"
+                  + (f" · {k['package']['file']}" if k.get("package") else "")
+                  + (f"\n  ⚠ content warning scan {k['warning_status']}" if k.get("warning_status") in ("partial", "failed") else ""))
             continue
         summary_lines.append(f"- {k['episode']}: {k['units']} units, {k['correction_count']} corrections, {k['warning_count']} content warnings, "
               f"{len(k['untranslated'])} untranslated, "
