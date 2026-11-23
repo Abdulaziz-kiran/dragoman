@@ -10,8 +10,10 @@ These rules follow the general guide and cover English-specific conventions. If 
 6. **Shortening.** Reading time is tight: cut redundant words first ("going to" → "gonna" only if the character's voice already does so). Never drop negation, questions, hedges (maybe, probably, I guess) or emotional weight.
 7. **Punctuation.** Use straight or typographic quotes consistently with the source file, "..." for trailing speech, and a leading dash only where the source marks two speakers on one event.
 
+<!-- review-only -->
 ## Reviewer checks for English
 
 - Pronoun gender and number are supported by evidence, not guessed.
 - Tense and aspect (has done / did / was doing) match the source meaning.
 - Phrasal verbs and idioms mean what the source says, without added nuance.
+<!-- /review-only -->

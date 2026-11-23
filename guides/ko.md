@@ -20,9 +20,11 @@ These rules follow the general guide and cover Korean-specific conventions. If t
 | Good luck, Mr. Detective. | 행운을 빌어요, 미스터 형사. | Mechanical title | 행운을 빕니다, 형사님. |
 | Could you help me? (to a boss) | 좀 도와줄래? | Wrong formality (반말 to superior) | 좀 도와주시겠어요? |
 
+<!-- review-only -->
 ## Reviewer checks for Korean
 
 - Speech levels (하십시오체/해요체/반말) and subject/object honorifics ("~시~", "저/나") match the directional relationship.
 - Verb-final negation ("안", "못", "~지 않-") and modality ("~겠-", "~ㄹ 것 같다") are preserved.
 - Kinship terms ("형/오빠/누나/언니") and titles are supported by context and not guessed.
 - Korean word spacing (띄어쓰기) is clean and no unnecessary pronouns ("당신", "그녀") remain.
+<!-- /review-only -->

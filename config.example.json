@@ -12,6 +12,7 @@
   "satir_sinir": 42,
   "reading_speed_threshold": 20,
   "timeout_seconds": 900,
+  "max_quota_wait_seconds": 3600,
   "meaning_gate": true,
   "target_cps": 17,
   "max_extension_seconds": 1.5,
@@ -22,6 +23,8 @@
   "learner_profile": "intermediate learner of the source language",
   "content_warnings": true,
   "break_chapters": true,
+  "honorific_comments": false,
+  "translator_notes": false,
   "fallback_fonts": [],
   "share_prompt": true,
   "guide_extra": []

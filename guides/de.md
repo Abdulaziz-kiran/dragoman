@@ -20,9 +20,11 @@ These rules follow the general guide and cover German-specific conventions. If t
 | Are you two in a spat? | Habt ihr Stress, Alter? | Invented slang | Habt ihr euch gestritten? |
 | Good luck, Mr. Detective. | Viel Glück, Herr Dr. Detektiv. | Mechanical title | Viel Glück, Herr Inspektor. |
 
+<!-- review-only -->
 ## Reviewer checks for German
 
 - «Du» / «Sie» (and capitalized «Sie»/«Ihnen»/«Ihr») matches the series guide and directional relationships.
 - German V2 / verb-final clause structure is natural, not an English syntax calque.
 - Negation («nicht», «kein»), modal hedges («vielleicht», «wohl»), and tense are preserved.
 - Unknown personal genders are not guessed.
+<!-- /review-only -->

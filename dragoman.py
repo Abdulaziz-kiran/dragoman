@@ -49,6 +49,10 @@ VARSAYILAN = {
     # None: the target language (overlay reasons and level reports are read by target-language viewers).
     "labels": {}, "report_language": None, "warning_language": None,
     "context_notes": "",  # extra instructions appended to the episode-context task (for example memory-label rules)
+    # Fansub releases that keep honorifics in ASS comments (Rei{**-kun}, {*}Sis{*Akari-neechan}): show them to the model.
+    "honorific_comments": False,
+    # At most 4 short on-screen notes per episode for wordplay that cannot survive translation.
+    "translator_notes": False,
 }
 # Viewer-facing labels; config "labels" overrides single keys (for example in the target language).
 # Built-in target-language packs live in locales/<code>.json; config "labels" still wins over them.
@@ -721,6 +725,26 @@ def tur_bul(stil: str, metin: str) -> str:
     return "dialogue"
 
 
+ONURSAL_ALT = re.compile(r"\{\*\}([^{}]*)\{\*([^{}*\\][^{}\\]*)\}")  # {*}Sis{*Akari-neechan}: the alternate wins
+ONURSAL_EK = re.compile(r"\{\*\*([^{}\\]+)\}")                       # Rei{**-kun}: the comment is the honorific
+
+
+def onursal_ac(metin: str) -> str:
+    """Unwrap fansub honorific comments into plain text, so the model sees them and no marker is created."""
+    return ONURSAL_EK.sub(lambda m: m.group(1), ONURSAL_ALT.sub(lambda m: m.group(2), metin))
+
+
+def onursal_uygula(ass: Ass) -> int:
+    """Rewrite the source events' text in memory (config honorific_comments); returns the number of changed events."""
+    sayi = 0
+    for o in ass.olaylar:
+        yeni = onursal_ac(o["fields"][ass.i_metin])
+        if yeni != o["fields"][ass.i_metin]:
+            o["fields"][ass.i_metin] = yeni
+            sayi += 1
+    return sayi
+
+
 def birimleri_cikar(ass: Ass) -> tuple[list[dict], dict[int, dict]]:
     birimler: dict = {}
     esleme: dict[int, dict] = {}
@@ -752,11 +776,26 @@ def birimleri_cikar(ass: Ass) -> tuple[list[dict], dict[int, dict]]:
             son_gorulen[anahtar] = (stil, max(ass.son(o), onceki[1]) if ayni else ass.son(o))
         if anahtar_k not in birimler:
             birimler[anahtar_k] = {"id": str(len(birimler) + 1), "text": anahtar, "style": stil,
-                                   "kind": tur, "start": ass.bas(o), "end": ass.son(o)}
+                                   "kind": tur, "start": ass.bas(o), "end": ass.son(o), **birim_izleri(ass, o, parcalar, dolu)}
         elif tur == "dialogue":
             birimler[anahtar_k]["end"] = max(birimler[anahtar_k]["end"], ass.son(o))
         esleme[o["index"]] = {"id": birimler[anahtar_k]["id"], "parts": parcalar, "nonempty": dolu, "merged": birlesik}
     return list(birimler.values()), esleme
+
+
+def birim_izleri(ass: Ass, o: dict, parcalar: list[str], dolu: list[int]) -> dict:
+    """Actor name, italic over the whole line (often inner voice or narration) and top placement, when present."""
+    iz = {}
+    if "name" in ass.bicim and o["fields"][ass.bicim.index("name")].strip():
+        iz["name"] = o["fields"][ass.bicim.index("name")].strip()
+    etiketler = [p for p in parcalar if p.startswith("{")]
+    bas = "".join(p for p in parcalar[:dolu[0]] if p.startswith("{"))
+    sonra = "".join(p for p in parcalar[dolu[0] + 1:] if p.startswith("{"))
+    if re.search(r"\\i1", bas) and not re.search(r"\\i0|\\r", sonra):
+        iz["italic"] = True
+    if any(re.search(r"\\an[789]", p) for p in etiketler):
+        iz["top"] = True
+    return iz
 
 
 KONUSMACI = re.compile(r"(?:\s|⟦\d+⟧)*[-‐–—]")
@@ -1235,6 +1274,31 @@ def _paketi_dogrula(video, ass, cikti, gecici, k, meta, isaret_sayisi, ses, av1,
 SERI_SEMA = {"type": "object", "properties": {"series": {"type": "string"}}, "required": ["series"]}
 
 
+def seri_sorunlari(metin: str, kapsam: list[str]) -> list[str]:
+    """Problems of a series guide answer, in English for the log and the retry prompt."""
+    sorunlar = []
+    if len(metin.split()) < 250:
+        sorunlar.append("too short")
+    if not re.search(r"(->|→)[^\n|]*\|[^\n]*\|", metin):  # the address table, whatever language the headings use
+        sorunlar.append("the directional address table `speaker -> listener | register | address | note` is missing")
+    if kapsam and not (kapsam[0] in metin and kapsam[-1] in metin):
+        sorunlar.append(f"the source range must cover {kapsam[0]}–{kapsam[-1]}")
+    if not cjk_allowed() and CJK.search(metin):
+        sorunlar.append("it contains CJK characters; write names and terms in the source or target script")
+    return sorunlar
+
+
+def cjk_temizle(deger):
+    """Remove CJK characters from every string of a JSON-like value."""
+    if isinstance(deger, str):
+        return CJK.sub("", deger)
+    if isinstance(deger, list):
+        return [cjk_temizle(x) for x in deger]
+    if isinstance(deger, dict):
+        return {k: cjk_temizle(v) for k, v in deger.items()}
+    return deger
+
+
 def seri_hazirla(a: dict, eser: str, kaynaklar: list[tuple[str, Path]], seri_dir: Path, rehber: str) -> Path:
     hedef = seri_dir / "series.md"
     if hedef.exists():
@@ -1255,8 +1319,10 @@ def seri_hazirla(a: dict, eser: str, kaynaklar: list[tuple[str, Path]], seri_dir
                 son_duz = duz
         metinler.append(f"### {etiket}\n" + "\n".join(satirlar))
     aralik = f"{kaynaklar[0][0]}–{kaynaklar[-1][0]}" if len(kaynaklar) > 1 else kaynaklar[0][0]
+    rehber = rehber_rolu(rehber, False)
     gorev = f"""You are the context specialist for a subtitle translation team. Write a SERIES GUIDE for "{eser}" from the supplied source subtitles. Write English Markdown, at most 2500 words. Source range: {aralik}.
 Include: source range (mark partial if appropriate); characters (source spelling, spoiler-free identity, voice); directional address table `speaker -> listener | register | address | note` describing target-language politeness, T-V forms and honorifics (or n/a); locked source-to-target terminology; overall tone; song translation approach.
+Use established target-language equivalents for game and profession terms unless the viewer's addendum says otherwise. Describe each voice by concrete markers (formality, sentence length, typical phrasing), not by piles of adjectives.
 Use the supplied translation guide. Keep honorifics only as permitted there. Do not invent information. Record only information affecting translation, never retell the plot. Describe characters as first encountered; do not reveal hidden identities, deaths, secrets or betrayals. Note register changes by episode without explaining spoilers. No tools. Return the guide in `series`.
 Translation guide:
 {rehber}
@@ -1268,14 +1334,18 @@ Translation guide:
             partiler.append(parti); parti, boy = [], 0
         parti.append(m); boy += len(m)
     partiler.append(parti)
-    mevcut, okunamayan = "", []
+    mevcut, okunamayan, okunan = "", [], []
     sira = list(partiler)
     k = 0
+    etiketi = lambda m: m.split("\n", 1)[0][4:].strip()
     while sira:
         parti = sira.pop(0); k += 1
+        kapsam = okunan + [etiketi(m) for m in parti]
         if mevcut:
             istem = (gorev + "\n\nUpdate the existing series guide with the new episodes and return the entire guide "
-                     "(preserve correct information; add characters, terminology and register changes).\n\n---- EXISTING SERIES GUIDE ----\n"
+                     "(preserve correct information; add characters, terminology and register changes). Keep everything about "
+                     "the earlier episodes, and update the source range at the top to cover every episode read so far "
+                     f"({kapsam[0]}–{kapsam[-1]}).\n\n---- EXISTING SERIES GUIDE ----\n"
                      + mevcut + "\n\n---- NEW SUBTITLES ----\n" + "\n\n".join(parti))
         else:
             istem = gorev + "\n\n---- SUBTITLES ----\n" + "\n\n".join(parti)
@@ -1292,14 +1362,25 @@ Translation guide:
                 log(f"Series guide: {okunamayan[-1]} blocked by content safety; skipped.")
             continue
         yeni = cevap["series"].strip()
-        if len(yeni.split()) < 250 or "register" not in yeni.lower():
-            log("Series guide too short or missing register table; retrying once.")
+        aralik_k = kapsam if okunan else []  # the range is checked when a guide is updated with later episodes
+        sorunlar = seri_sorunlari(yeni, aralik_k)
+        if sorunlar:
+            log(f"Series guide: {'; '.join(sorunlar)}; retrying once.")
             try:
-                cevap, _ = model_cagir(a["model_series"], istem, SERI_SEMA, a["timeout_seconds"] * 2)
-                yeni = max(yeni, cevap["series"].strip(), key=lambda t: len(t.split()))
+                cevap, _ = model_cagir(a["model_series"], istem + "\n\nYour previous answer had these problems; fix them: "
+                                       + "; ".join(sorunlar) + ".", SERI_SEMA, a["timeout_seconds"] * 2)
+                ikinci = cevap["series"].strip()
+                if (len(seri_sorunlari(ikinci, aralik_k)), -len(ikinci.split())) < (len(sorunlar), -len(yeni.split())):
+                    yeni = ikinci
             except ModelHatasi:
                 pass
+            sorunlar = seri_sorunlari(yeni, aralik_k)
+            if not cjk_allowed() and CJK.search(yeni):
+                yeni = CJK.sub("", yeni)
+            if sorunlar:
+                log(f"WARNING: series guide still has problems ({'; '.join(sorunlar)}); CJK characters were removed if any.")
         mevcut = yeni or mevcut
+        okunan = kapsam
     if not mevcut:
         raise SystemExit("Could not write series guide: every episode was blocked by content safety")
     if okunamayan:
@@ -1324,9 +1405,13 @@ BAGLAM_SEMA = {"type": "object", "properties": {
     "recurring": {"type": "array", "items": {"type": "object", "properties": {
         "source": {"type": "string"}, "translation": {"type": "string"}}, "required": ["source", "translation"]}},
     "uncertainties": {"type": "array", "items": {"type": "string"}},
+    "turns": {"type": "array", "items": {"type": "object", "properties": {
+        "first_id": {"type": "string"}, "last_id": {"type": "string"}, "speaker": {"type": "string"},
+        "listener": {"type": "string"}, "confidence": {"type": "string", "enum": ["high", "medium", "low"]}},
+        "required": ["first_id", "last_id", "speaker", "listener", "confidence"]}},
     "breaks": {"type": "array", "items": {"type": "object", "properties": {
         "last_id": {"type": "string"}, "reason": {"type": "string"}}, "required": ["last_id", "reason"]}}},
-    "required": ["terms", "addresses", "voices", "recurring", "uncertainties", "breaks"]}
+    "required": ["terms", "addresses", "voices", "recurring", "uncertainties", "turns", "breaks"]}
 DURAK_SEMA = {"type": "object", "properties": {"breaks": BAGLAM_SEMA["properties"]["breaks"]}, "required": ["breaks"]}
 DURAK_GOREV = ("Return all natural breaks throughout the episode (usually 5-12): a scene or small event closes, "
                "place/time changes, and neither dialogue nor tension is interrupted. Exclude the opening/ending "
@@ -1343,29 +1428,50 @@ def hafiza_yukle(a: dict, eser: str, seri_dir: Path) -> dict:
     return h
 
 
-def hafiza_metni(h: dict) -> str:
+def bolum_sirasi(etiket) -> tuple[int, int] | None:
+    m = re.fullmatch(r"S(\d+)E(\d+)", str(etiket or ""))
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def hafiza_gecerli(x: dict, etiket: str | None) -> bool:
+    """A memory entry is known at this episode unless it comes from a later one (entries without a label count as earlier)."""
+    simdi, kayit = bolum_sirasi(etiket), bolum_sirasi(x.get("episode"))
+    return simdi is None or kayit is None or kayit <= simdi
+
+
+def hafiza_metni(h: dict, etiket: str | None = None) -> str:
     e = lambda x: f'({x.get("episode", "?")}) '
-    satir = [f'- {e(t)}{t["source"]} → {t["translation"]}' + (f' ({t["note"]})' if t.get("note") else "") for t in h.get("terms", {}).values()]
+    g = lambda d: [x for x in d.values() if hafiza_gecerli(x, etiket)]
+    satir = [f'- {e(t)}{t["source"]} → {t["translation"]}' + (f' ({t["note"]})' if t.get("note") else "") for t in g(h.get("terms", {}))]
     satir += [f'- {e(x)}{x.get("direction", "")}: {x.get("register", "")} {x.get("address", "")} — {x.get("note", "")}'.replace("  ", " ")
-              for x in h.get("addresses", {}).values()]
-    satir += [f'- {e(x)}{x["character"]} voice: {x["note"]}' for x in h.get("voices", {}).values()]
+              for x in g(h.get("addresses", {}))]
+    satir += [f'- {e(x)}{x["character"]} voice: {x["note"]}' for x in g(h.get("voices", {}))]
     return "\n".join(satir)
 
 
 def hafiza_guncelle(seri_dir: Path, baglam: dict, etiket: str) -> None:
     yol = seri_dir / "memory.json"
     h = joku(yol, {"terms": {}, "addresses": {}, "voices": {}})
-    for t in baglam.get("terms", []) + baglam.get("recurring", []):
-        h["terms"][t["source"].lower()] = {"source": t["source"], "translation": t["translation"], "note": t.get("note", ""), "episode": etiket}
+    # Recurring everyday lines stay episode decisions, not locked memory. An entry from a later episode is not replaced by an
+    # earlier one translated afterwards.
+    def koy(bolum, anahtar, deger):
+        eski = h.setdefault(bolum, {}).get(anahtar)
+        if eski and not hafiza_gecerli(eski, etiket):
+            return
+        h[bolum][anahtar] = deger
+    for t in baglam.get("terms", []):
+        koy("terms", t["source"].lower(), {"source": t["source"], "translation": t["translation"], "note": t.get("note", ""), "episode": etiket})
     for x in baglam.get("addresses", []):
         yon = f'{x["from"]} → {x["to"]}'
-        h["addresses"][yon.lower()] = {"direction": yon, "register": x["register"], "address": x["address"], "note": x["note"], "episode": etiket}
+        koy("addresses", yon.lower(), {"direction": yon, "register": x["register"], "address": x["address"], "note": x["note"], "episode": etiket})
     for x in baglam.get("voices", []):
-        h["voices"][x["character"].lower()] = {"character": x["character"], "note": x["note"], "episode": etiket}
+        koy("voices", x["character"].lower(), {"character": x["character"], "note": x["note"], "episode": etiket})
     jyaz(yol, h)
 
 
-def baglam_metni(b: dict) -> str:
+def baglam_metni(b: dict, kapi_icin: bool = False) -> str:
+    if kapi_icin:  # the meaning gate sees terms, addresses and voices only
+        b = {**b, "recurring": [], "uncertainties": []}
     satir = ["Terms (use consistently throughout this episode):"] + [f'- {t["source"]} → {t["translation"]}' + (f' ({t["note"]})' if t["note"] else "") for t in b["terms"]]
     satir += ["Directional address and register:"] + [f'- {x["from"]} → {x["to"]}: {x["register"]}' + (f', {x["address"]}' if x["address"] else "") + (f' — {x["note"]}' if x["note"] else "") for x in b["addresses"]]
     satir += ["Character voices:"] + [f'- {x["character"]}: {x["note"]}' for x in b["voices"]]
@@ -1376,7 +1482,8 @@ def baglam_metni(b: dict) -> str:
     return "\n".join(satir)
 
 
-def bolum_baglami(a: dict, ass: "Ass", birimler: list[dict], seri: str, hafiza: dict, rehber: str, is_dir: Path) -> dict:
+def bolum_baglami(a: dict, ass: "Ass", birimler: list[dict], seri: str, hafiza: dict, rehber: str, is_dir: Path,
+                  etiket: str | None = None) -> dict:
     dosya = is_dir / "episode-context.json"
     if dosya.exists():
         return joku(dosya)
@@ -1388,21 +1495,38 @@ def bolum_baglami(a: dict, ass: "Ass", birimler: list[dict], seri: str, hafiza: 
             adlar.setdefault(t, o["fields"][ad_i].strip())
     satirlar = []
     for b in birimler:
-        if b["kind"] == "dialogue":
-            ad = adlar.get(ISARET.sub("", b["text"]).replace("\\N", " ").strip(), "")
+        if b["kind"] in ("dialogue", "sign"):
+            ad = adlar.get(ISARET.sub("", b["text"]).replace("\\N", " ").strip(), "") if b["kind"] == "dialogue" else "sign"
             satirlar.append(f'{b["id"]} [{int(b["start"] // 60)}:{int(b["start"] % 60):02d}] ' + (f"[{ad}] " if ad else "") + ISARET.sub("", b["text"]))
-    istem = (f"{rehber}\n\n---- SERIES GUIDE ----\n{seri}\n\n"
-             + f"---- SERIES MEMORY ----\n{hafiza_metni(hafiza)}\n\n"
+    molalar = a.get("break_chapters", True) is not False
+    istem = (f"{rehber_rolu(rehber, False)}\n\n---- SERIES GUIDE ----\n{seri}\n\n"
+             + f"---- SERIES MEMORY ----\n{hafiza_metni(hafiza, etiket)}\n\n"
              + "Read the entire episode and make shared decisions for translators working on separate chunks. "
-             "Return terms (source, translation, note), addresses (from, to, register, address, note), voices "
-             "(character, note), recurring expressions, uncertainties (with IDs), and natural break candidates. "
+             "Return only what is specific to this episode or new or changed compared with the series guide and memory; do not "
+             "copy entries that are already there unchanged. Return terms (source, translation, note), addresses (from, to, "
+             "register, address, note), voices (character, note), recurring expressions, uncertainties (with IDs), and turns. "
              "Register is free text describing how each speaker addresses each listener in the target language: "
              "T-V form, politeness, honorifics, or n/a. Preserve previously used decisions unless the source changes; "
              "explain any change. Context never overrides clear source meaning. Follow the guide, invent nothing, "
-             "and do not leak later-episode information. No tools.\n" + DURAK_GOREV
+             "and do not leak later-episode information. "
+             "Turns: runs of consecutive lines (first_id..last_id) with who speaks (speaker) to whom (listener) and your "
+             "confidence (high, medium, low). Never guess: leave out lines you cannot attribute from the dialogue itself; a "
+             "line without a name is not narration unless the source shows narration. Lines marked [sign] are on-screen text "
+             "for context. No tools.\n" + (DURAK_GOREV if molalar else "Return `breaks` as an empty list.\n")
              + (f"\n{a['context_notes']}\n" if a.get("context_notes") else "") +
              "\n---- EPISODE (id [minute:second] [speaker] text) ----\n" + "\n".join(satirlar))
     cevap, kullanim = model_cagir(a["model_series"], istem, BAGLAM_SEMA, a["timeout_seconds"])
+    if not cjk_allowed() and CJK.search(json.dumps(cevap, ensure_ascii=False)):
+        log("Episode context contains CJK characters; retrying once.")
+        try:
+            ikinci, kullanim = model_cagir(a["model_series"], istem + "\n\nDo not use CJK characters anywhere in the answer.",
+                                           BAGLAM_SEMA, a["timeout_seconds"])
+            cevap = ikinci
+        except ModelHatasi:
+            pass
+        if CJK.search(json.dumps(cevap, ensure_ascii=False)):
+            log("WARNING: episode context still contained CJK characters; they were removed.")
+            cevap = cjk_temizle(cevap)
     sonuc = {k: cevap.get(k, []) for k in BAGLAM_SEMA["required"]}
     sonuc["usage"] = kullanim
     jyaz(dosya, sonuc)
@@ -1411,8 +1535,23 @@ def bolum_baglami(a: dict, ass: "Ass", birimler: list[dict], seri: str, hafiza: 
     return sonuc
 
 
+def konusmaci_ata(birimler: list[dict], turlar: list[dict]) -> int:
+    """Speaker and listener from medium/high-confidence turns onto the units of each run; returns tagged units."""
+    sira = {b["id"]: k for k, b in enumerate(birimler)}
+    sayi = 0
+    for t in turlar:
+        k1, k2 = sira.get(str(t.get("first_id"))), sira.get(str(t.get("last_id")))
+        if t.get("confidence") not in ("high", "medium") or k1 is None or not str(t.get("speaker", "")).strip():
+            continue
+        for b in birimler[k1:(k2 if k2 is not None and k2 >= k1 else k1) + 1]:
+            if b["kind"] == "dialogue":
+                b["speaker"], b["listener"] = str(t["speaker"]).strip(), str(t.get("listener", "")).strip()
+                sayi += 1
+    return sayi
+
+
 def durak_adaylari(a: dict, birimler: list[dict], is_dir: Path, baglam: dict | None) -> list[dict]:
-    if baglam and baglam.get("breaks"):
+    if baglam is not None and "breaks" in baglam:  # the context call already answered, even with no breaks
         return baglam["breaks"]
     dosya = is_dir / "break-candidates.json"
     if dosya.exists():
@@ -1469,7 +1608,9 @@ def bolum_isaretleri(video: Path, molalar: list[dict], sure: float, hedef: Path)
 
 
 CEVIRI_SEMA = {"type": "object", "properties": {
-    "translations": {"type": "object", "additionalProperties": {"type": "string"}}}, "required": ["translations"]}
+    "translations": {"type": "object", "additionalProperties": {"type": "string"}},
+    "notes": {"type": "object", "additionalProperties": {"type": "string"}}}, "required": ["translations"]}
+NOT_SINIRI, NOT_UZUNLUK = 4, 80  # translator notes: at most per episode, characters per note
 
 KATEGORILER = ["meaning_error", "reversed_negation", "omission_or_addition", "speaker_or_register", "inconsistent_term",
                "unnatural_or_invented_slang", "broken_format"]
@@ -1486,30 +1627,42 @@ KAPI_SEMA = {"type": "object", "properties": {"decisions": {"type": "array", "it
     "required": ["id", "decision", "reason"]}}}, "required": ["decisions"]}
 
 
-def anlam_kapisi(a: dict, adaylar: list[dict], rehber: str, is_dir: Path) -> dict:
+def anlam_kapisi(a: dict, adaylar: list[dict], rehber: str, is_dir: Path, baglam: str = "", birimler: list[dict] | None = None) -> dict:
     """Meaning gate for reviewer corrections: reject when AFTER carries less of the source meaning than BEFORE. A correction
     without a decision, or one that content safety blocks, is rejected (the existing translation already passed review).
     Content-safety blocks split the list; any other model error stops the episode (no unchecked corrections are delivered;
     the same command resumes). The cache is validated by a signature of the correction list."""
     dosya = is_dir / "meaning-gate.json"
-    imza = sha(json.dumps([(d["id"], d["after"]) for d in adaylar], ensure_ascii=False))
+    model = a.get("model_gate") or a.get("model_review")
+    imza = sha(json.dumps([model, sha(rehber), [(d["id"], d["after"]) for d in adaylar]], ensure_ascii=False))
     onceki = joku(dosya)
     if onceki and onceki.get("signature") == imza:
         return onceki
     if not adaylar:
         return {"status": "not needed", "rejected": {}}
-    gorev = (f"{rehber}\n\n---- TASK ----\nA reviewer wants to change the subtitle translations below. Each has SOURCE, BEFORE "
-             "(current translation), AFTER (proposed) and the reviewer's reason. `accept` only when both hold: the claimed error "
-             "really exists in BEFORE, and AFTER carries the whole meaning of SOURCE (emphasis, negation, questions and who is "
-             "speaking to whom included) at least as well as BEFORE. If AFTER drops any meaning element of SOURCE, if it is a "
-             "matter of taste, or if the category is wrong, `reject`. One decision per id with a short reason. No tools.\n\n")
+    gorev = (f"{rehber_rolu(rehber, True)}\n\n" + (f"---- EPISODE CONTEXT ----\n{baglam}\n\n" if baglam else "")
+             + "---- TASK ----\nA reviewer wants to change the subtitle translations below. Each has SOURCE (with its on-screen "
+             "duration and neighbouring source lines for context), BEFORE (current translation), AFTER (proposed) and the "
+             "reviewer's reason. `accept` only when both hold: the claimed error really exists in BEFORE, and AFTER carries the "
+             "whole meaning of SOURCE (emphasis, negation, questions and who is speaking to whom included) at least as well as "
+             "BEFORE. Also accept when BEFORE adds casual fillers or a register absent from SOURCE and AFTER fixes that without "
+             "losing meaning, and when AFTER applies an explicit rule of the guide or the viewer's addendum. If AFTER drops any "
+             "meaning element of SOURCE, or if it is a matter of taste, `reject`. One decision per id with a short reason. No tools.\n\n")
+    sira = {b["id"]: k for k, b in enumerate(birimler or [])}
+    def komsular(d):
+        k = sira.get(d["id"])
+        if k is None:
+            return ""
+        b = birimler[k]
+        yakin = [x["text"] for x in birimler[max(0, k - 2):k]] + ["▶"] + [x["text"] for x in birimler[k + 1:k + 3]]
+        return f'  DURATION: {max(0.0, b["end"] - b["start"]):.1f} s\n  NEIGHBOURS: ' + " | ".join(yakin) + "\n"
     kararlar, kullanim, filtre, kuyruk = {}, [], [], [adaylar]
     while kuyruk:
         p = kuyruk.pop(0)
-        istem = gorev + "\n".join(f'{d["id"]} [{d["category"]}]\n  SOURCE: {d["source"]}\n  BEFORE: {d["before"]}\n'
+        istem = gorev + "\n".join(f'{d["id"]} [{d["category"]}]\n  SOURCE: {d["source"]}\n{komsular(d)}  BEFORE: {d["before"]}\n'
                                    f'  AFTER: {d["after"]}\n  REASON: {d["reason"]}' for d in p)
         try:
-            cevap, kul = model_cagir(a.get("model_gate") or a["model_review"], istem, KAPI_SEMA, a["timeout_seconds"])
+            cevap, kul = model_cagir(model, istem, KAPI_SEMA, a["timeout_seconds"])
         except GuvenlikEngeli:
             if len(p) > 1:
                 kuyruk[:0] = [p[:len(p) // 2], p[len(p) // 2:]]
@@ -1534,8 +1687,21 @@ SANSUR_SEMA = {"type": "object", "properties": {
         "required": ["first_id", "last_id", "reason"]}}}, "required": ["scenes"]}
 
 
+def birim_basligi(b: dict) -> str:
+    """[kind|style|italic|top|duration|≤~N chars|name|speaker → listener]; empty fields are omitted."""
+    sure = max(0.0, b["end"] - b["start"])
+    alanlar = [b["kind"], b["style"], "italic" if b.get("italic") else "", "top" if b.get("top") else "", f"{sure:.1f} s"]
+    cps = BACKEND_CONFIG.get("target_cps", 17) or 0
+    if b["kind"] == "dialogue" and cps and sure * cps < 60:
+        alanlar.append(f"≤~{int(sure * cps)} chars")
+    alanlar.append(b.get("name", ""))
+    if b.get("speaker"):
+        alanlar.append(f'{b["speaker"]} → {b["listener"]}' if b.get("listener") else b["speaker"])
+    return "[" + "|".join(x for x in alanlar if x) + "]"
+
+
 def _satir(b: dict) -> str:
-    return f'{b["id"]} [{b["kind"]}|{b["style"]}|{max(0.0, b["end"] - b["start"]):.1f} s]: {b["text"]}'
+    return f'{b["id"]} {birim_basligi(b)}: {b["text"]}'
 
 
 def sahne_parcala(birimler: list[dict], hedef: int) -> list[list[dict]]:
@@ -1580,13 +1746,19 @@ def untranslated_line(t: str, source: str | None = None) -> bool:
 
 
 def _cevir_istek(a, parca, onceki, sonraki, rehber, seri) -> dict[str, str]:
-    istem = (f"{rehber}\n\n---- SERIES GUIDE ----\n{seri}\n\n"
-             "Translate every subtitle unit below into the target language. Format: id [kind|style|duration]: text; duration is "
-             "how many seconds the line stays on screen. "
+    istem = (f"{rehber_rolu(rehber, False)}\n\n---- SERIES GUIDE ----\n{seri}\n\n"
+             "Translate every subtitle unit below into the target language. Format: id [kind|style|flags|duration|limit|name|"
+             "speaker → listener]: text; duration is how many seconds the line stays on screen, `≤~N chars` is the length that "
+             "can be read in that time, `italic` often marks inner voice or narration and `top` text at the top of the screen. "
+             "Speaker tags are hints; explicit source meaning wins. "
              f"Viewers cannot read faster than about {a.get('target_cps', 17)} characters per second: on short lines drop needless "
              "length, never meaning. "
              "Return a translation for every unchanged ID in `translations`. Omit nothing. No tools."
-             "\n\nPrevious lines (context only, do not translate):\n" + "\n".join(b["text"] for b in onceki)
+             + (f" `notes` (id: text, at most {NOT_UZUNLUK} characters, in the target language) is only for a pun, wordplay or double "
+                "meaning that matters for the scene and cannot survive translation (for example a name that is also a word). "
+                "Never for culture words, food or honorifics. Usually there are none; return an empty object."
+                if a.get("translator_notes") is True else "")
+             + "\n\nPrevious lines (context only, do not translate):\n" + "\n".join(b["text"] for b in onceki)
              + "\n\nTRANSLATE:\n" + "\n".join(_satir(b) for b in parca)
              + "\n\nNext lines (context only, do not translate):\n" + "\n".join(b["text"] for b in sonraki))
     cevap, kullanim = model_cagir(a["model_translate"], istem, CEVIRI_SEMA, a["timeout_seconds"])
@@ -1603,7 +1775,13 @@ def _cevir_istek(a, parca, onceki, sonraki, rehber, seri) -> dict[str, str]:
         if b["kind"] == "dialogue" and untranslated_line(v, b["text"]):
             continue
         sonuc[k] = v
-    return sonuc, kullanim
+    notlar = {}
+    if a.get("translator_notes") is True and isinstance(cevap.get("notes"), dict):
+        for k, v in cevap["notes"].items():
+            v = metin_temizle(v) if isinstance(v, str) else ""
+            if k in sonuc and v and columns(v) <= NOT_UZUNLUK and (cjk_allowed() or not CJK.search(v)):
+                notlar[k] = v
+    return sonuc, kullanim, notlar
 
 
 def parca_yarima_al(dosya: Path, kullanim_devami: bool = False) -> None:
@@ -1653,7 +1831,7 @@ def cevir_parca(a, no, parca, onceki, sonraki, rehber, seri, is_dir) -> dict:
             bu_onceki = (list(onceki) + parca[:i0])[-6:] if i0 else onceki
             bu_sonraki = (parca[i1 + 1:] + list(sonraki))[:4] if i1 + 1 < len(parca) else sonraki
             try:
-                ceviri, kullanim = _cevir_istek(a, eksik, bu_onceki, bu_sonraki, rehber, seri)
+                ceviri, kullanim, *ek = _cevir_istek(a, eksik, bu_onceki, bu_sonraki, rehber, seri)
             except GuvenlikEngeli:
                 engel = True
                 break
@@ -1664,6 +1842,8 @@ def cevir_parca(a, no, parca, onceki, sonraki, rehber, seri, is_dir) -> dict:
                 parca_yarima_al(dosya, kullanim_devami=True)
                 raise
             sonuc["translations"].update(ceviri); sonuc["usage"].append(kullanim)
+            if ek and ek[0]:
+                sonuc.setdefault("notes", {}).update(ek[0])
             eksik = [b for b in eksik if b["id"] not in sonuc["translations"]]
         if eksik and len(eksik) > 1:
             yari = len(eksik) // 2
@@ -1680,7 +1860,7 @@ def cevir_parca(a, no, parca, onceki, sonraki, rehber, seri, is_dir) -> dict:
     return sonuc
 
 
-def incele_parca(a, no, parca, ceviri, rehber, seri, is_dir) -> dict:
+def incele_parca(a, no, parca, ceviri, rehber, seri, is_dir, onceki=(), sonraki=()) -> dict:
     dosya = is_dir / "review" / f"{no:03d}.json"
     imza = sha(json.dumps([(b["id"], ceviri.get(b["id"])) for b in parca], ensure_ascii=False))
     if dosya.exists():
@@ -1697,12 +1877,12 @@ def incele_parca(a, no, parca, ceviri, rehber, seri, is_dir) -> dict:
     while kuyruk:
         p = kuyruk.pop(0)
         try:
-            d, son, kul = _incele_istek(a, p, ceviri, rehber, seri, tuzak_kur(p, ceviri, no, 0) if p is parca else None)
+            d, son, kul = _incele_istek(a, p, ceviri, rehber, seri, tuzak_kur(p, ceviri, no, 0) if p is parca else None, onceki, sonraki)
             if p is parca and d is not None and d[-1] is False:
 
                 log(f"Review chunk {no}: reviewer missed trap line; reviewing once more.")
                 sonuc["trap"].append(False)
-                d2, son, kul2 = _incele_istek(a, p, ceviri, rehber, seri, tuzak_kur(p, ceviri, no, 1))
+                d2, son, kul2 = _incele_istek(a, p, ceviri, rehber, seri, tuzak_kur(p, ceviri, no, 1), onceki, sonraki)
                 sonuc["usage"].append(kul)
                 if d2[1] is not False:  # the second reviewer caught its trap (or had none): only its corrections count
                     d, kul = d2, kul2
@@ -1743,17 +1923,22 @@ def tuzak_kur(parca, ceviri, no, deneme):
             "translation": ceviri[target_unit["id"]], "position": yer}
 
 
-def _incele_istek(a, parca, ceviri, rehber, seri, tuzak=None):
+def _incele_istek(a, parca, ceviri, rehber, seri, tuzak=None, onceki=(), sonraki=()):
     liste = list(parca)
     if tuzak:
         liste.insert(tuzak["position"], tuzak)
         ceviri = {**ceviri, tuzak["id"]: tuzak["translation"]}
-    satirlar = [f'{b["id"]} [{b["kind"]}|{b["style"]}]\n  SOURCE: {b["text"]}\n  TRANSLATION: {ceviri[b["id"]]}' for b in liste]
-    istem = (f"{rehber}\n\n---- SERIES GUIDE ----\n{seri}\n\n"
+    satirlar = [f'{b["id"]} {birim_basligi(b) if "end" in b else "[" + b["kind"] + "|" + b["style"] + "]"}\n  SOURCE: {b["text"]}'
+                f'\n  TRANSLATION: {ceviri[b["id"]]}' for b in liste]
+    baglam = lambda xs: "\n".join(f'  SOURCE: {b["text"]} / TRANSLATION: {ceviri.get(b["id"], "")}' for b in xs) or "  (none)"
+    istem = (f"{rehber_rolu(rehber, True)}\n\n---- SERIES GUIDE ----\n{seri}\n\n"
              "You are an independent reviewer. Check every SOURCE and TRANSLATION pair from beginning to end "
              "using the reviewer checklist. Return only real errors in `corrections` with categories: "
-             f"{', '.join(KATEGORILER)}. Synonym preferences are not errors. `new` contains the complete corrected "
-             "line. `last_reviewed_id` is the last ID you actually read. No tools.\n\n" + "\n".join(satirlar))
+             f"{', '.join(KATEGORILER)}. Synonym preferences are not errors. A translation shortened to fit its duration is not "
+             "an omission if every meaning unit survives. Speaker tags are hints; explicit source meaning wins. `new` contains "
+             "the complete corrected line. `last_reviewed_id` is the last ID you actually read. No tools.\n\n"
+             "Previous lines (context only, not for review):\n" + baglam(onceki) + "\n\nREVIEW:\n" + "\n".join(satirlar)
+             + "\n\nNext lines (context only, not for review):\n" + baglam(sonraki))
     cevap, kullanim = model_cagir(a["model_review"], istem, INCELEME_SEMA, a["timeout_seconds"])
     ids = {b["id"] for b in parca}
     duz = [d for d in cevap.get("corrections", []) if d.get("id") in ids and d.get("new", "").strip()]
@@ -2167,6 +2352,39 @@ def uyari_katmani(a: dict, birimler: list[dict], tarama: dict, ass: "Ass") -> tu
     return ek_olaylar, kayit, ek_stil
 
 
+def not_katmani(a: dict, birimler: list[dict], notlar: dict[str, str], ass: "Ass", uyarilar: list[dict],
+                haric: set) -> tuple[list[str], list[dict], str | None]:
+    """Translator notes as top-of-screen events: the first NOT_SINIRI by time, each on screen for its unit (at least 2.5 s,
+    longer when needed for reading), never into the next note; moved below a warning or top-placed dialogue it overlaps."""
+    bul = {b["id"]: b for b in birimler}
+    adaylar = sorted((bul[i]["start"], i, t) for i, t in notlar.items() if i in bul and i not in haric)
+    if len(adaylar) > NOT_SINIRI:
+        log(f"Translator notes: {len(adaylar)} proposed, the first {NOT_SINIRI} kept ({', '.join(i for _, i, _ in adaylar[NOT_SINIRI:])} dropped).")
+    adaylar = adaylar[:NOT_SINIRI]
+    if not adaylar:
+        return [], [], None
+    yukseklik = ass.play_res_y()
+    boyut, uyari_boyut = max(10, round(yukseklik * 0.034)), max(12, round(yukseklik * 0.042))
+    taban = max(10, uyari_boyut // 2)
+    stil = ass.stil_satiri("TranslatorNote", {"fontsize": boyut, "italic": -1, "alignment": 8, "marginv": taban,
+                                              "outline": max(1, boyut // 18)})
+    ustte = [(ass.bas(o), ass.son(o)) for o in ass.olaylar if re.search(r"\\an[789]", ass.metin(o))]
+    ustte += [(max(0, u["start"] - 4), u["skip_until"]) for u in uyarilar]
+    cps = a.get("target_cps", 17) or 17
+    olaylar, kayit = [], []
+    for k, (bas, i, metin) in enumerate(adaylar):
+        son = max(bas + 2.5, bul[i]["end"], bas + columns(metin) / cps)
+        if k + 1 < len(adaylar):
+            son = min(son, adaylar[k + 1][0] - 0.05)
+        cakisma = any(b0 < son and b1 > bas for b0, b1 in ustte)
+        alan = {"layer": "8", "start": sn_ass(bas), "end": sn_ass(max(son, bas + 0.5)), "style": "TranslatorNote", "name": "",
+                "marginl": "0", "marginr": "0", "marginv": str(taban + round(uyari_boyut * 1.6)) if cakisma else "0", "effect": "",
+                "text": metin}
+        olaylar.append("Dialogue: " + ",".join(alan.get(c, "") for c in ass.bicim))
+        kayit.append({"id": i, "start": round(bas, 2), "text": metin, "moved": cakisma})
+    return olaylar, kayit, stil
+
+
 def bolum_no(ad: str) -> int | None:
 
     temiz = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", ad)
@@ -2210,6 +2428,8 @@ def bolum_isle(a: dict, eser: str, sezon: int, no: int | None, video: Path | Non
     HATA_DOSYASI = is_dir / "errors.jsonl"
     baslangic = run_start(is_dir)
     ass, iz = kaynagi_hazirla(is_dir, video, kaynak_ass)
+    if a.get("honorific_comments") is True and onursal_uygula(ass):
+        log("Honorific comments unwrapped into the source text.")
     birimler, esleme = birimleri_cikar(ass)
     eski_birim = joku(is_dir / "units.json")
     if eski_birim is not None and [(b["id"], b["text"]) for b in eski_birim] != [(b["id"], b["text"]) for b in birimler] \
@@ -2245,14 +2465,15 @@ def bolum_isle(a: dict, eser: str, sezon: int, no: int | None, video: Path | Non
     eski_is = (is_dir / "translations").exists() and any((is_dir / "translations").glob("[0-9][0-9][0-9].json")) and not (is_dir / "episode-context.json").exists()
     if yapilacak and not eski_is:
         try:
-            baglam = bolum_baglami(a, ass, birimler, seri, hafiza, rehber, is_dir)
+            baglam = bolum_baglami(a, ass, birimler, seri, hafiza, rehber, is_dir, etiket)
         except GuvenlikEngeli as e:
             log(f"Episode context blocked by safety; using series guide and memory ({e})")
         if baglam:
             seri = seri + "\n\n---- EPISODE CONTEXT (binding for all chunks) ----\n" + baglam_metni(baglam)
+            konusmaci_ata(birimler, baglam.get("turns", []))
 
     parcalar = sahne_parcala(yapilacak, parca_ceviri)
-    kullanim, cevrilemedi, filtre = [], [], []
+    kullanim, cevrilemedi, filtre, notlar = [], [], [], {}
     with cf.ThreadPoolExecutor(a["parallel"]) as havuz:
         isler, bas_i = [], 0
         for k, p in enumerate(parcalar):
@@ -2265,6 +2486,7 @@ def bolum_isle(a: dict, eser: str, sezon: int, no: int | None, video: Path | Non
         for f in isler:
             s = f.result()
             ceviri.update(s["translations"]); kullanim += s["usage"]; cevrilemedi += s["untranslated"]; filtre += s.get("blocked", [])
+            notlar.update(s.get("notes", {}))
         tarama = sansur_isi.result() if sansur_isi else {"status": "off", "scenes": [], "unscanned": []}
         ogrenme = ogrenme_isi.result() if ogrenme_isi else None
     if len(cevrilemedi) > max(3, len(birimler) // 50):
@@ -2279,7 +2501,11 @@ def bolum_isle(a: dict, eser: str, sezon: int, no: int | None, video: Path | Non
     iparcalar = sahne_parcala(incelenecek, parca_inceleme)
     duzeltmeler, incelenemedi, filtre_inceleme, tuzaklar, eksik_okuma = [], 0, [], [], 0
     with cf.ThreadPoolExecutor(a["parallel"]) as havuz:
-        isler = [havuz.submit(incele_parca, a, k + 1, p, ceviri, rehber, seri, is_dir) for k, p in enumerate(iparcalar)]
+        isler, bas_i = [], 0
+        for k, p in enumerate(iparcalar):
+            isler.append(havuz.submit(incele_parca, a, k + 1, p, ceviri, rehber, seri, is_dir,
+                                      incelenecek[max(0, bas_i - 3):bas_i], incelenecek[bas_i + len(p):bas_i + len(p) + 3]))
+            bas_i += len(p)
         for f, p in zip(isler, iparcalar):
             try:
                 s = f.result()
@@ -2305,7 +2531,8 @@ def bolum_isle(a: dict, eser: str, sezon: int, no: int | None, video: Path | Non
     son_d = {d["id"]: d for d in uygulanan}  # two corrections for one unit: the last one stays, counted and gated once
     reddedilen += [{**d, "rejected": "superseded by a later correction of the same unit"} for d in uygulanan if son_d[d["id"]] is not d]
     uygulanan = list(son_d.values())
-    kapi = anlam_kapisi(a, uygulanan, rehber, is_dir) if a.get("meaning_gate", True) else {"status": "off", "rejected": {}}
+    kapi = (anlam_kapisi(a, uygulanan, rehber, is_dir, baglam_metni(baglam, kapi_icin=True) if baglam else "", birimler)
+            if a.get("meaning_gate", True) else {"status": "off", "rejected": {}})
     reddedilen += [{**d, "rejected": f"meaning gate: {kapi['rejected'][d['id']]}"} for d in uygulanan if d["id"] in kapi["rejected"]]
     uygulanan = [d for d in uygulanan if d["id"] not in kapi["rejected"]]
     for d in uygulanan:
@@ -2331,6 +2558,11 @@ def bolum_isle(a: dict, eser: str, sezon: int, no: int | None, video: Path | Non
         if b["kind"] == "dialogue" and columns(ISARET.sub("", ceviri[b["id"]]).replace("\\N", " ")) / sure > a.get("reading_speed_threshold", 20):
             hizli += 1
     ek_olaylar, sansur_kayit, ek_stil = uyari_katmani(a, birimler, tarama, ass) if sansur_acik else ([], [], None)
+    secilen_notlar = []
+    if a.get("translator_notes") is True and notlar:
+        not_ev, secilen_notlar, not_stil = not_katmani(a, birimler, notlar, ass, sansur_kayit, set(cevrilemedi) | set(filtre))
+        ek_olaylar += not_ev
+        ek_stil = "\n".join(x for x in (ek_stil, not_stil) if x) or None
     jyaz(is_dir / "warnings.json", {"level": a["content_warnings"], "status": tarama["status"], "ranges": sansur_kayit, "scan": tarama})
     final = is_dir / "final.ass"
     final_metin = ass.yaz(yeni, ek_olaylar, ek_stil)
@@ -2378,7 +2610,7 @@ def bolum_isle(a: dict, eser: str, sezon: int, no: int | None, video: Path | Non
              "review_traps": {"inserted": sum(1 for t in tuzaklar if t), "missed_first": sum(1 for t in tuzaklar if t and t[0] is False),
                                 "missed_twice": sum(1 for t in tuzaklar if len(t) > 1 and t[-1] is False),
                                 "possibly_unread": eksik_okuma},
-             "fast_lines": hizli, "extended_lines": uzatilan,
+             "fast_lines": hizli, "extended_lines": uzatilan, "translator_notes": secilen_notlar,
              "broken_markers": isaret_uyari,
              "human_translation": ({k: insan.get(k) for k in ("source", "score", "decision", "coverage", "timing_match", "reason", "summary")}
                                 if insan else None), "font_changes": font_degisen, "warning_count": len(sansur_kayit), "warning_status": tarama["status"], "usage": toplam,
@@ -2841,6 +3073,16 @@ def failed_job_report(a: dict, eser: str, sezon: int, no: int | None, error) -> 
         jyaz(path, report)
 
 
+INCELEME_BLOGU = re.compile(r"<!-- review-only -->.*?<!-- /review-only -->\n?", re.S)
+
+
+def rehber_rolu(rehber: str, inceleme: bool) -> str:
+    """Guide for one role: review-only blocks are kept (markers removed) for review and the gate, dropped otherwise."""
+    if inceleme:
+        return re.sub(r"<!-- /?review-only -->\n?", "", rehber)
+    return INCELEME_BLOGU.sub("", rehber)
+
+
 def rehber_metni(a: dict) -> str:
     """Prompt guide: guide.md + guides/<target>.md (or one replacement file in "guide"), then "guide_extra" files."""
     if a.get("guide"):  # a complete replacement guide instead of guide.md + guides/<target>.md
@@ -3178,6 +3420,7 @@ def main() -> None:
               f"{len(k['untranslated'])} untranslated, "
               + (f"{len(k['blocked_translation'])} source lines retained due to content safety, " if k.get("blocked_translation") else "")
               + (f"{len(k['blocked_review'])} unreviewed due to content safety, " if k.get("blocked_review") else "")
+              + (f"{len(k['translator_notes'])} translator notes, " if k.get("translator_notes") else "")
               + f"{k['minutes']} minutes · {k['library_dir']}"
               + (f"\n  ⚠ content warning scan {k['warning_status']}" if k.get("warning_status") in ("partial", "failed") else "")
               + (f"\n  ⚠ low review confidence: {k['review_traps']['missed_twice']} chunks missed the reviewer trap twice"

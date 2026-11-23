@@ -20,9 +20,11 @@ These rules follow the general guide and cover Portuguese-specific conventions. 
 | Are you two in a spat? | Vocês estão de treta, né? | Invented slang and filler | Vocês brigaram? |
 | Maybe you're right. | Você tem razão. | Lost hedge | Talvez você tenha razão. |
 
+<!-- review-only -->
 ## Reviewer checks for Portuguese
 
 - Brazilian vs. European variety is consistent and matches the series guide.
 - *Você* / *o senhor* / *a senhora* register matches character relationships without sudden shifts.
 - Gender/number agreements and omitted pronouns do not introduce unverified assumptions.
 - Negation, hedges, and natural titles are preserved without added slang.
+<!-- /review-only -->

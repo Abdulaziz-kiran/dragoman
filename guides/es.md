@@ -21,9 +21,11 @@ These rules follow the general guide and cover Spanish-specific conventions. If 
 | Are you two in a spat? | ¿Están peleados, compas? | Invented regional slang | ¿Están peleados? |
 | Good luck, Mr. Detective. | Buena suerte, Sr. Dr. Detective. | Mechanical title | Buena suerte, detective. |
 
+<!-- review-only -->
 ## Reviewer checks for Spanish
 
 - Opening «¿» and «¡» are present on all questions and exclamations.
 - Neutral Spanish is maintained without unintended regionalisms («vosotros» / «vos» / local slang).
 - «Tú» / «usted» matches the series guide and directional relationships.
 - Grammatical gender on adjectives and articles is backed by context, not guessed.
+<!-- /review-only -->

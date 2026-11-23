@@ -21,9 +21,11 @@ These rules follow the general guide and cover Chinese-specific conventions. If 
 | Good luck, Mr. Detective. | 祝你好运，先生侦探。 | Mechanical title | 祝你好运，侦探先生。 |
 | Are you two in a spat? | 你们俩闹别扭啦？ | Added casual filler not in source | 你们俩吵架了吗？ |
 
+<!-- review-only -->
 ## Reviewer checks for Chinese
 
 - Simplified vs. Traditional script matches the project setting with no mixed characters.
 - Negation ("不", "没", "别") and hedging ("可能", "也许") were not dropped during shortening.
 - Address ("你"/"您") and surname-title order ("X先生", "X医生") match character relationships.
 - Full-width punctuation is consistent and no unnatural English-style spaces appear between Chinese words.
+<!-- /review-only -->

@@ -20,9 +20,11 @@ These rules follow the general guide and cover Japanese-specific conventions. If
 | Are you two in a spat? | 二人ともケンカしてるんだぜ？ | Invented rough ending | ２人ともケンカしてるの？ |
 | Maybe you're right. | あなたの言う通りです。 | Lost hedge, stiff pronoun | たぶん君の言う通りだ。 |
 
+<!-- review-only -->
 ## Reviewer checks for Japanese
 
 - Politeness level (*だ/る* vs. *です/ます* vs. *敬語*) matches the series register decisions.
 - Unnatural pronouns (*あなた*, *彼/彼女*) are omitted unless needed for emphasis or contrast.
 - Negation, uncertainty (*かも*, *たぶん*), and question force are preserved.
 - Japanese punctuation, `「...」` quotes, and no ASCII word spaces are consistent.
+<!-- /review-only -->

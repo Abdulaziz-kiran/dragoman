@@ -20,9 +20,11 @@ These rules follow the general guide and cover Russian-specific conventions. If 
 | Good luck, Mr. Detective. | Удачи, господин доктор детектив. | Mechanical title | Удачи, детектив. |
 | Are you two in a spat? | Вы что, в контрах, ребят? | Invented slang and wrong formality | Вы поссорились? |
 
+<!-- review-only -->
 ## Reviewer checks for Russian
 
 - Directional «ты» / «вы» matches the series guide and stays consistent within each relationship.
 - Past-tense verb and adjective genders are supported by evidence, not guessed.
 - Negation («не», «нет»), questions, and uncertainty hedges («наверное», «может быть») are intact.
 - Word order sounds like natural spoken Russian rather than an English calque.
+<!-- /review-only -->

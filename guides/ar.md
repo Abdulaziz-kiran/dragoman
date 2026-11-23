@@ -21,9 +21,11 @@ These rules follow the general guide and cover Arabic-specific conventions. If t
 | Good luck, Mr. Detective. | حظًا موفقًا، السيد المحقق الدكتور. | Mechanical title | حظًا موفقًا، أيها المحقق. |
 | Are you two in a spat? | هل أنتما متخاصمان يا صاح؟ | Invented slang not in source | هل بينكما خلاف؟ |
 
+<!-- review-only -->
 ## Reviewer checks for Arabic
 
 - Gender, number (including dual), and masculine/feminine verb agreement match known evidence and are not guessed.
 - Negation ("لا", "لم", "لن", "ليس") and question markers ("هل") are intact.
 - Arabic punctuation ("،", "؟") is used consistently instead of Latin "," and "?".
 - Register stays in clear Modern Standard Arabic without unintended dialectal filler.
+<!-- /review-only -->

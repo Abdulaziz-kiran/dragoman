@@ -19,9 +19,11 @@ These rules follow the general guide and cover French-specific conventions. If t
 | Are you two in a spat? | Vous êtes en froid, genre ? | Invented filler | Vous vous êtes disputés ? |
 | It's a letter from your sister? | C'est une lettre de ma sœur ? | Reversed possession | C'est une lettre de ta sœur ? |
 
+<!-- review-only -->
 ## Reviewer checks for French
 
 - *Tu*/*vous* matches directional register decisions with no unmotivated shifts.
 - Gender and number agreements (adjectives, past participles, pronouns) have textual evidence.
 - Negation (*ne... pas*, *rien*, *jamais*), hedges, and questions are intact.
 - French punctuation spacing before `?`, `!`, `:`, `;` and natural titles are consistent.
+<!-- /review-only -->
