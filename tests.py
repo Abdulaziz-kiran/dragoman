@@ -1939,7 +1939,17 @@ kontrol("Unit header carries italic, top, duration, reading limit and actor name
         A._satir(_mu[0]) == "1 [dialogue|D|italic|1.4 s|≤~23 chars|Rei]: I have to go."
         and A._satir(_mu[1]).startswith("2 [dialogue|D|top|4.0 s]:") and "|italic|" not in A._satir(_mu[2]))
 _mu[0].update(speaker="Rei", listener="Akari")
-kontrol("Speaker and listener appear in the header", "|Rei|Rei → Akari]" in A._satir(_mu[0]))
+kontrol("Speaker and listener appear in the header; an equal actor name is not repeated",
+        A._satir(_mu[0]).endswith("|Rei → Akari]: I have to go.") and "|Rei|" not in A._satir(_mu[0]))
+_it = A.Ass(_bos_ass + "Dialogue: 0,0:00:01.00,0:00:02.00,D,,0,0,0,,{\\i1}Whole line italic.{\\i0}\n"
+            "Dialogue: 0,0:00:03.00,0:00:04.00,D,,0,0,0,,{\\i1}{\\i0}Not italic at all.\n")
+_itu, _ = A.birimleri_cikar(_it)
+kontrol("A line closed by {\\i0} after its text is italic; a cancelled \\i1 is not", _itu[0].get("italic") and not _itu[1].get("italic"))
+kontrol("Honorific regexes match only the fansub forms",
+        A.onursal_ac("A{**check timing}B{***}C{**-Kun}") == "A{**check timing}B{***}C{**-Kun}"
+        and A.onursal_ac("{*}{*note}") == "{*}{*note}" and A.onursal_ac("{*}Hi. See you, Bro{*Taro-niichan}") == "{*}Hi. See you, Bro{*Taro-niichan}"
+        and A.onursal_ac("{*} {* }") == "{*} {* }" and A.onursal_ac("{*}Sis{**x}") == "{*}Sis{**x}"
+        and A.onursal_ac("Mio{**-onee-chan}") == "Mio-onee-chan")
 
 # Role-specific guide: review-only blocks reach review and the gate, not translation.
 _rg = A.rehber_metni(dict(A.VARSAYILAN))
@@ -1971,8 +1981,12 @@ with tempfile.TemporaryDirectory() as td:
             "2 [0:02] [sign] EXIT" in asked[0] and "new or changed" in asked[0] and "Return `breaks` as an empty list." in asked[0])
     kontrol("Only medium/high-confidence turns tag dialogue units", tagged == 2 and units[2]["speaker"] == "Rei"
             and "speaker" not in units[1] and "speaker" not in units[3])
+    kontrol("Breaks not asked for are not stored, so a later run with chapters still looks for them", "breaks" not in b)
     with patch.object(A, "model_cagir", side_effect=AssertionError("second breaks call")) as again:
-        kontrol("An empty breaks list from the context call is final", A.durak_adaylari({}, units, td, b) == [] and not again.called)
+        kontrol("An empty breaks list from the context call is final", A.durak_adaylari({}, units, td, {**b, "breaks": []}) == [] and not again.called)
+    named = [{k: v for k, v in dict(u, name=n).items() if k not in ("speaker", "listener")} for u, n in ((units[0], "Ken"), (units[2], "Rei"))]
+    A.konusmaci_ata(named, [{"first_id": "1", "last_id": "3", "speaker": "rei", "listener": "Akari", "confidence": "high"}])
+    kontrol("A turn never contradicts the actor name column", "speaker" not in named[0] and named[1]["speaker"] == "Rei")
 
 # Reviewer gets durations and read-only neighbours; the gate gets context, neighbours and a model/guide signature.
 with tempfile.TemporaryDirectory() as td:
@@ -1993,22 +2007,22 @@ with tempfile.TemporaryDirectory() as td:
         A.anlam_kapisi({"model_review": "m1", "timeout_seconds": 1}, cand, "", td, "Terms:\n- Rose → Gül", units)
         A.anlam_kapisi({"model_review": "m1", "timeout_seconds": 1}, cand, "", td, "Terms:\n- Rose → Gül", units)
         A.anlam_kapisi({"model_review": "m2", "timeout_seconds": 1}, cand, "", td, "Terms:\n- Rose → Gül", units)
-    kontrol("Gate prompt has episode context, duration and neighbours; no wrong-category rejection clause",
-            "---- EPISODE CONTEXT ----\nTerms:" in gate_prompts[0][1] and "DURATION: 1.0 s" in gate_prompts[0][1]
+    kontrol("Gate prompt has episode context, line header and neighbours; no wrong-category rejection clause",
+            "---- SERIES GUIDE AND EPISODE CONTEXT ----\nTerms:" in gate_prompts[0][1] and "LINE: [dialogue|D|1.0 s|≤~17 chars|Rei → Akari]" in gate_prompts[0][1]
             and "NEIGHBOURS: Hi. | EXIT | ▶ | Who?" in gate_prompts[0][1] and "category is wrong" not in gate_prompts[0][1]
             and "casual fillers" in gate_prompts[0][1])
     kontrol("Gate cache signature includes the model", [m for m, _ in gate_prompts] == ["m1", "m2"])
 
 # Translator notes (opt-in): parsed from the reply, at most four by time, top events that avoid warnings.
 A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "tr")
-with patch.object(A, "model_cagir", return_value=({"translations": {"1": "Selam."}, "notes": {"1": "Ad aynı zamanda 'kar' demek.", "9": "x",
-                                                                                        "1x": "y"}}, {})) as call:
+with patch.object(A, "model_cagir", return_value=({"translations": {"1": "Selam."}, "notes": [{"id": "1", "text": "Ad aynı zamanda 'kar' demek."},
+                                                                                       {"id": "9", "text": "x"}]}, {})) as call:
     _tr, _, _nt = A._cevir_istek({"model_translate": "m", "timeout_seconds": 1, "translator_notes": True}, units[:1], [], [], "", "")
 kontrol("Notes are requested only when enabled and kept only for translated ids",
-        _nt == {"1": "Ad aynı zamanda 'kar' demek."} and "`notes`" in call.call_args.args[1])
+        _nt == {"1": "Ad aynı zamanda 'kar' demek."} and "`notes`" in call.call_args.args[1] and call.call_args.args[2] is A.CEVIRI_NOT_SEMA)
 with patch.object(A, "model_cagir", return_value=({"translations": {"1": "Selam."}, "notes": {"1": "z"}}, {})) as call:
     _, _, _nt2 = A._cevir_istek({"model_translate": "m", "timeout_seconds": 1}, units[:1], [], [], "", "")
-kontrol("Notes are ignored when the option is off", _nt2 == {} and "`notes`" not in call.call_args.args[1])
+kontrol("Notes are ignored when the option is off", _nt2 == {} and "`notes`" not in call.call_args.args[1] and call.call_args.args[2] is A.CEVIRI_SEMA)
 _na = A.Ass("[Script Info]\nPlayResY: 720\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, Italic, Alignment, MarginV\nStyle: D,Arial,40,0,2,10\n" + _bos_ass)
 nunits = [{"id": str(i), "kind": "dialogue", "style": "D", "text": "x", "start": float(t), "end": float(t) + 1} for i, t in enumerate((10, 11, 30, 40, 50, 60), 1)]
 with patch.object(A, "log") as lg:
@@ -2018,7 +2032,7 @@ kontrol("At most four notes, first by time; style is top, italic and laid out by
         [r["id"] for r in rec] == ["1", "2", "3", "4"] and lg.called and st == "Style: TranslatorNote,Arial,24,-1,8,15")
 kontrol("A note lasts at least 2.5 s but never runs into the next note; it moves below an overlapping warning",
         ",0:00:10.00,0:00:10.95,TranslatorNote," in ev[0] and ",0:00:11.00,0:00:13.50,TranslatorNote," in ev[1]
-        and rec[2]["moved"] and ev[2].split(",")[7] != "0" and not rec[3]["moved"] and ev[3].split(",")[7] == "0")
+        and rec[2]["moved"] and ev[2].startswith("Dialogue: 9,") and ev[2].split(",")[7] == "0" and not rec[3]["moved"] and ev[3].startswith("Dialogue: 8,"))
 with tempfile.TemporaryDirectory() as td:
     td = Path(td)
     a = dict(A.VARSAYILAN, backend="agy", model="fake"); A.configure(a, "en", "tr"); a.update(A.BACKEND_CONFIG)
@@ -2031,8 +2045,8 @@ with tempfile.TemporaryDirectory() as td:
     def route2(model, prompt, schema, timeout, **k):
         if schema is A.BAGLAM_SEMA:
             return {x: [] for x in A.BAGLAM_SEMA["required"]}, {}
-        if schema is A.CEVIRI_SEMA:
-            return {"translations": {"1": "Adım Snow."}, "notes": {"1": "Snow: kar"}}, {}
+        if schema is A.CEVIRI_NOT_SEMA:
+            return {"translations": {"1": "Adım Snow."}, "notes": [{"id": "1", "text": "Snow: kar"}]}, {}
         if schema is A.INCELEME_SEMA:
             return {"corrections": [], "last_reviewed_id": "1"}, {}
         raise AssertionError("unexpected call")
@@ -2073,10 +2087,160 @@ with tempfile.TemporaryDirectory() as td:
     A.hafiza_guncelle(td, {"terms": [{"source": "Later", "translation": "Önce", "note": ""}], "recurring": [{"source": "Thanks", "translation": "Sağ ol"}],
                            "addresses": [], "voices": []}, "S01E03")
     h = A.joku(td / "memory.json")
-    kontrol("Recurring lines are not stored; a later episode's entry is not overwritten",
-            "thanks" not in h["terms"] and h["terms"]["later"]["translation"] == "Sonra")
-    kontrol("Memory for an episode hides entries from later episodes; unlabeled entries count as earlier",
-            "Old → Eski" in A.hafiza_metni(h, "S01E03") and "Later" not in A.hafiza_metni(h, "S01E03") and "Later" in A.hafiza_metni(h, "S01E10"))
+    kontrol("Recurring lines are not stored; the latest episode's version stays on top",
+            "thanks" not in h["terms"] and h["terms"]["later"]["translation"] == "Sonra" and len(h["terms"]["later"]["versions"]) == 2)
+    kontrol("Out of order: each episode sees the latest version not after it; unlabeled entries count as earlier",
+            "Old → Eski" in A.hafiza_metni(h, "S01E03") and "Later → Önce" in A.hafiza_metni(h, "S01E05")
+            and "Later → Sonra" in A.hafiza_metni(h, "S01E10") and "Later" not in A.hafiza_metni(h, "S01E02"))
+
+# Second review round.
+A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "tr")
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    parca = [{"id": str(i), "kind": "dialogue", "style": "D", "text": f"Line {i} here.", "start": i, "end": i + 1} for i in (1, 2)]
+    A.jyaz(td / "review" / "001.json", {"corrections": [], "last_reviewed_id": "2", "last_id": "2"})
+    prompts = []
+    with patch.object(A, "model_cagir", side_effect=lambda m, prompt, *x, **k: (prompts.append(prompt), ({"corrections": [], "last_reviewed_id": "2"}, {}))[1]), \
+            patch.object(A, "log"):
+        r = A.incele_parca({"model_review": "m", "timeout_seconds": 1}, 1, parca, {"0": "Önce.", "1": "a", "2": "b"}, "", "", td,
+                           [{"id": "0", "text": "Before."}], [])
+    kontrol("An unsigned saved review is reviewed again with the real request and keeps its context lines",
+            r.get("signature") and "SOURCE: Before. / TRANSLATION: Önce." in prompts[0])
+    trap = A.tuzak_kur([{"id": str(i), "kind": "dialogue", "style": "D", "text": f"This is a fairly long sentence number {i}.", "start": i, "end": i + 2}
+                        for i in range(1, 11)], {str(i): f"Bu oldukça uzun bir cümle, numarası {i}." for i in range(1, 11)}, 1, 0)
+    kontrol("The trap line has a duration like the real lines", trap and trap["end"] - trap["start"] == 2)
+
+# Codex strict schema: translations by id and notes as a list validate under the strict rules.
+A.configure(dict(A.VARSAYILAN, backend="codex", model="fake"), "en", "tr")
+captured = {}
+def fake_cli(backend, model, prompt, schema, timeout):
+    captured["schema"] = schema
+    return {"translations": {"1": "Selam.", "2": "Güle güle."}, "notes": [{"id": "1", "text": "kelime oyunu"}]}, {}
+def strict_ok(node):
+    if isinstance(node, dict):
+        if node.get("type") == "object" and (not node.get("properties") or node.get("additionalProperties") is not False):
+            return False
+        return all(strict_ok(v) for v in node.values())
+    return all(strict_ok(v) for v in node) if isinstance(node, list) else True
+with patch.object(A, "_cli", side_effect=fake_cli), patch.object(A, "HATA_DOSYASI", None):
+    reply, _ = A.model_cagir("fake", "TRANSLATE:\n1 [dialogue|D|1.0 s]: Hi.\n2 [dialogue|D|1.0 s]: Bye.\n\nNext lines (context only):\n",
+                             A.CEVIRI_NOT_SEMA, 1)
+    strict = A._strict_schema(captured["schema"])
+    try:
+        A._validate(reply, strict); valid = True
+    except A.ModelHatasi:
+        valid = False
+kontrol("Codex strict schema: every object has properties and closed keys; a reply with notes validates",
+        strict_ok(strict) and valid and strict["required"] == ["translations", "notes"]
+        and strict["properties"]["translations"]["required"] == ["1", "2"] and A.stage_of(A.CEVIRI_NOT_SEMA) == "translate")
+A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "tr")
+
+# Notes survive an interrupted chunk.
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    parca = [{"id": str(i), "kind": "dialogue", "style": "D", "text": f"Line {i} here.", "start": i, "end": i + 1} for i in (1, 2)]
+    calls = iter([({"1": "a"}, {}, {"1": "not"}), A.ModelHatasi("down")])
+    def flaky(*args):
+        r = next(calls)
+        if isinstance(r, Exception):
+            raise r
+        return r
+    with patch.object(A, "_cevir_istek", side_effect=flaky), patch.object(A, "log"):
+        try:
+            A.cevir_parca({}, 1, parca, [], [], "", "", td)
+        except A.ModelHatasi:
+            pass
+    with patch.object(A, "_cevir_istek", return_value=({"2": "b"}, {}, {})), patch.object(A, "log"):
+        r = A.cevir_parca({}, 1, parca, [], [], "", "", td)
+    kontrol("Translator notes survive a partial chunk and its resume", r.get("notes") == {"1": "not"} and r["translations"] == {"1": "a", "2": "b"})
+
+# Series guide: honorifics are unwrapped; a broken later batch keeps the earlier guide; repeated short lines by different speakers stay.
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    e1 = td / "e1.ass"; e2 = td / "e2.ass"
+    e1.write_text(_bos_ass + "Dialogue: 0,0:00:01.00,0:00:02.00,D,Ann,0,0,0,,Wait, Ken{**-kun}!\nDialogue: 0,0:00:03.00,0:00:04.00,D,Bob,0,0,0,,Wait, Ken{**-kun}!\n"
+                  + "".join(f"Dialogue: 0,0:00:05.00,0:00:06.00,D,,0,0,0,,Filler line number {i} {'x' * 4000}\n" for i in range(90)), encoding="utf-8")
+    e2.write_text(_bos_ass + "".join(f"Dialogue: 0,0:00:05.00,0:00:06.00,D,,0,0,0,,Other line number {i} {'y' * 4000}\n" for i in range(10)), encoding="utf-8")
+    good = "word " * 260 + "\nAnn -> Ken | samimi | Ken | -\nRange S01E01\n"
+    replies = iter([{"series": good}, {"series": "short"}, {"series": "still short"}])
+    tasks = []
+    with patch.object(A, "model_cagir", side_effect=lambda m, prompt, *x, **k: (tasks.append(prompt), (next(replies), {}))[1]), patch.object(A, "log"):
+        A.seri_hazirla({"model_series": "m", "timeout_seconds": 1, "honorific_comments": True}, "Show", [("S01E01", e1), ("S01E02", e2)], td, "")
+    written = (td / "series.md").read_text(encoding="utf-8")
+    kontrol("Series guide input unwraps honorifics and keeps the same line said by two people",
+            "Ann: Wait, Ken-kun!" in tasks[0] and "Bob: Wait, Ken-kun!" in tasks[0])
+    kontrol("A broken later batch keeps the earlier guide and names the unread episodes; batches state their own range",
+            len(tasks) == 3 and "Range S01E01" in written and "not merged (the update came back broken): S01E02" in written
+            and "Source range: S01E01." in tasks[0] and "Source range: S01E01–S01E02." in tasks[1])
+
+# Translator notes: top-aligned styles count as overlap, notes too close together are dropped, no Styles section means no notes.
+_ns = A.Ass("[V4+ Styles]\nFormat: Name, Fontname, Fontsize, Alignment\nStyle: D,Arial,40,2\nStyle: Top,Arial,40,8\n" + _bos_ass
+            + "Dialogue: 3,0:00:10.00,0:00:12.00,Top,,0,0,0,,A sign at the top\n")
+with patch.object(A, "log"):
+    ev, rec, _ = A.not_katmani({"target_cps": 17}, nunits, {"1": "Not 1", "2": "Not 2"}, _ns, [], set())
+    ev2, rec2, _ = A.not_katmani({"target_cps": 17}, [dict(nunits[0]), dict(nunits[0], id="9", start=10.3)], {"1": "a", "9": "b"}, _ns, [], set())
+    none = A.not_katmani({"target_cps": 17}, nunits, {"1": "Not 1"}, A.Ass(_bos_ass), [], set())
+kontrol("A note over a top-aligned style shares its layer; close notes are dropped; no Styles section, no notes",
+        rec[0]["moved"] and ev[0].startswith("Dialogue: 3,") and len(rec2) == 1 and none == ([], [], None))
+
+# font_duzelt with Style as the first event column.
+_sf = ("[V4+ Styles]\nFormat: Name, Fontname, Fontsize\nStyle: D,Limited,40\n[Events]\nFormat: Style, Start, End, Text\n"
+       "Dialogue: D,0:00:01.00,0:00:02.00,Şimdi {\\fnLimited}değil\n")
+fixed, _ = A.font_duzelt(_sf, {"limited": set(range(32, 127))})
+kontrol("Event columns starting with Style still find the style and inline fonts", "Style: D,Source Sans 3,40" in fixed
+        and "Dialogue: D,0:00:01.00,0:00:02.00,Şimdi {\\fnSource Sans 3}değil" in fixed)
+
+# Two speakers split by a source break between tags keep the break.
+e2s = {"parts": ["", "{\\i1}", "- A", "{\\i0}", "\\N", "{\\i1}", "- B", "{\\i0}", ""], "nonempty": [2, 6], "merged": False}
+_two, _ = A.olaya_yerlestir("- Bu gerçekten çok uzun bir cümle, sığmayacak kadar uzun bir şey⟦1⟧- Evet.", e2s, "dialogue", 42)
+kontrol("Two speakers split between tags keep their break; the long side wraps alone", _two.endswith("{\\i0}\\N{\\i1}- Evet.{\\i0}") and _two.count("\\N") == 2)
+
+# A season with no video in the folder stops.
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    folder = td / "Show"; folder.mkdir()
+    (folder / "Show S01E01.mkv").write_bytes(b"v")
+    def cfg2():
+        a = dict(A.VARSAYILAN, backend="agy", model="fake", human_check=False, share_prompt=False)
+        a.update({k: td / "out" / k for k in ("work_dir", "jobs_dir", "library_dir", "watch")})
+        return a
+    with patch.object(sys, "argv", ["dragoman", str(folder), "--season", "3", "--target", "tr"]), patch.object(A, "ayarlar", side_effect=lambda *x: cfg2()), \
+            patch.object(A.shutil, "which", return_value=None), patch.object(A, "log"), contextlib.redirect_stdout(io.StringIO()):
+        try:
+            A.main(); code = 0
+        except SystemExit as e:
+            code = e.code
+    kontrol("--season with no matching video stops", "season 3" in str(code))
+
+# The context is a delta: series memory reaches the translator, and the gate sees the full context.
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    a = dict(A.VARSAYILAN, backend="agy", model="fake"); A.configure(a, "en", "tr"); a.update(A.BACKEND_CONFIG)
+    a.update({k: td / k for k in ("work_dir", "jobs_dir", "library_dir", "watch")})
+    a.update(content_warnings=False, level_report=False, break_chapters=False)
+    is_dir = a["work_dir"] / "Seri" / "S01E02"; is_dir.mkdir(parents=True)
+    seri = is_dir.parent / "series.md"; seri.write_text("series", encoding="utf-8")
+    A.jyaz(is_dir.parent / "memory.json", {"terms": {"rose": {"source": "Rose Mansion", "translation": "Gül Konağı", "note": "", "episode": "S01E01"}},
+                                           "addresses": {}, "voices": {}})
+    (is_dir / "source.ass").write_text(_bos_ass + "Dialogue: 0,0:00:01.00,0:00:04.00,D,,0,0,0,,We go to Rose Mansion.\n", encoding="utf-8")
+    seen = {}
+    def route3(model, prompt, schema, timeout, **k):
+        seen.setdefault(A.stage_of(schema), prompt)
+        if schema is A.BAGLAM_SEMA:
+            return {x: [] for x in A.BAGLAM_SEMA["required"]}, {}
+        if schema is A.CEVIRI_SEMA:
+            return {"translations": {"1": "Gül Evi'ne gidiyoruz."}}, {}
+        if schema is A.INCELEME_SEMA:
+            return {"corrections": [{"id": "1", "category": "inconsistent_term", "new": "Gül Konağı'na gidiyoruz.", "reason": "term"}], "last_reviewed_id": "1"}, {}
+        if schema is A.KAPI_SEMA:
+            return {"decisions": [{"id": "1", "decision": "accept", "reason": "-"}]}, {}
+        raise AssertionError("unexpected")
+    with patch.object(A, "model_cagir", side_effect=route3), patch.object(A, "HATA_DOSYASI", None), patch.object(A, "log"):
+        A.bolum_isle(a, "Seri", 1, 2, None, None, "", seri, False, None)
+    kontrol("Series memory reaches translator, reviewer and gate even when the episode context is empty",
+            all("Rose Mansion → Gül Konağı" in seen[k] for k in ("translate", "review", "gate"))
+            and "Terms (use consistently" not in seen["translate"])
+    A.RECEIPT[:] = [None, ""]; A.RUN_FILE[0] = None
 
 # Golden file: a synthetic episode with a deterministic fake model must give exactly the stored output (line wrapping,
 # duration extension, tags, styles; karaoke, romaji and drawings untouched). DRAGOMAN_SAMPLES=<folder> runs the same
