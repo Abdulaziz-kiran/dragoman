@@ -361,7 +361,7 @@ for yol in ("ass", "srt", "video"):
             kontrol('Final source is invisible before successful preparation', not (is_dir / "source.ass").exists())
             hedef.write_text(_bos_ass, encoding="utf-8")
             return {} if yol == "video" else None
-        nesne, ad = (A.shutil, "copyfile") if yol == "ass" else ((A.subprocess, "run") if yol == "srt" else (A, "altyazi_sec"))
+        nesne, ad = (A, "_ass_yap") if yol == "ass" else ((A.subprocess, "run") if yol == "srt" else (A, "altyazi_sec"))
         with patch.object(nesne, ad, side_effect=kes):
             try:
                 A.kaynagi_hazirla(is_dir, dis if yol == "video" else None, None if yol == "video" else dis)
@@ -1333,16 +1333,33 @@ with tempfile.TemporaryDirectory() as td:
     a.update({k: td / k for k in ("work_dir", "jobs_dir", "library_dir", "watch")})
     a.update(break_chapters=True, level_report=True)
     is_dir = a["work_dir"] / "Seri" / "S01E01"; (is_dir / "human").mkdir(parents=True)
-    pro = is_dir / "human" / "embedded-3.ass"; pro.write_text(_bos_ass + "Dialogue: 0,0:00:01.00,0:00:02.00,D,,0,0,0,,Merhaba\n", encoding="utf-8")
+    pro = is_dir / "human" / "embedded-3.ass"; pro.write_text("[V4+ Styles]\nFormat: Name, Fontname, Fontsize\nStyle: D,Arial,40\n" + _bos_ass + "Dialogue: 0,0:00:01.00,0:00:02.00,D,,0,0,0,,Merhaba\n", encoding="utf-8")
     secim = {"source": str(pro), "kind": "embedded track", "track": 3, "ass": str(pro), "offset_seconds": 0.0, "score": None,
              "professional": "NF", "use": True}
+    scanned = []
+    def fake_warning_model(model, prompt, schema, timeout, **kw):
+        assert schema is A.SANSUR_SEMA
+        scanned.append(prompt)
+        return {"scenes": [{"first_id": "1", "last_id": "1", "reason": "kiss"}]}, {}
     with patch.object(A, "video_fontlari", return_value={}), patch.object(A, "ogrenme_raporu") as og, \
-            patch.object(A, "durak_adaylari") as dur, patch.object(A, "paketle", return_value={"file": "x"}):
+            patch.object(A, "durak_adaylari") as dur, patch.object(A, "paketle", return_value={"file": "x"}), \
+            patch.object(A, "model_cagir", side_effect=fake_warning_model):
         k = A.insan_teslim(a, "Seri", 1, 1, td / "v.mkv", secim, None, True)
     kontrol("Human delivery record lists every role model", set(k["models"]) == {"model_" + r for r in A.ROLES})
+    final_text = (a["jobs_dir"] / "Seri" / "S01E01" / "final.ass").read_text(encoding="utf-8")
+    kontrol("Human delivery runs the content warning scan (human subtitle without a source) and adds the overlay",
+            len(scanned) == 1 and "Merhaba" in scanned[0] and k["warning_count"] == 1 and k["warning_status"] == "complete"
+            and "Style: ContentWarning" in final_text and final_text.count(",ContentWarning,") == 1
+            and (a["jobs_dir"] / "Seri" / "S01E01" / "warnings.json").exists())
     kontrol("Professional track is delivered without source subtitles; breaks and level report skipped",
             k["human"]["professional"] == "NF" and not og.called and not dur.called and (a["jobs_dir"] / "Seri" / "S01E01" / "final.ass").exists())
     A.RECEIPT[:] = [None, ""]; A.RUN_FILE[0] = None
+
+# A scan with no dialogue lines is complete without a model call.
+with tempfile.TemporaryDirectory() as td:
+    with patch.object(A, "model_cagir", side_effect=AssertionError("called")) as call:
+        r = A.sansur_tara({}, [{"id": "1", "kind": "sign", "style": "S", "text": "EXIT", "start": 0, "end": 1}], Path(td))
+    kontrol("Warning scan without dialogue is complete and makes no call", r["status"] == "complete" and r["scenes"] == [] and not call.called)
 
 # Folder settings override the output_dir layout; a replacement guide can be configured.
 with tempfile.TemporaryDirectory() as td:
@@ -1478,6 +1495,255 @@ with patch.object(sys, "argv", ["dragoman.py", "--languages"]), contextlib.redir
     A.main()
 kontrol("--languages lists the built-in packs", "tr  Turkish (Türkçe)" in _out.getvalue() and len(_out.getvalue().splitlines()) == len(_packs))
 
+
+# 1.3.x correctness fixes.
+A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "tr")
+two = A.satir_kir("- Bu gerçekten çok uzun bir cümle, sığmayacak kadar uzun.\\N- Evet.", 42)
+kontrol("Two-speaker line keeps its dash structure; each speaker part wraps on its own",
+        two.split("\\N")[0].startswith("- ") and two.split("\\N")[-1] == "- Evet." and two.count("\\N") == 2
+        and all(A.columns(x) <= 42 for x in two.split("\\N")))
+kontrol("Two-speaker line that fits is unchanged", A.satir_kir("- Evet.\\N- Hayır.", 42) == "- Evet.\\N- Hayır.")
+e = {"parts": ["{\\i1}", "Hello", "{\\i0}", " world"], "nonempty": [1, 3], "merged": False}
+long_tr = "Merhaba, bu gerçekten çok uzun bir çeviri⟦1⟧ ve daha da uzun olmaya devam ediyor"
+placed, broken = A.olaya_yerlestir(long_tr, e, "dialogue", 42)
+kontrol("Inline tag switches: the line wraps by visible length and tags stay in place",
+        not broken and placed.count("\\N") == 1 and placed.startswith("{\\i1}Merhaba") and placed.count("{\\i0}") == 1
+        and all(A.columns(A.ETIKET.sub("", x)) <= 42 for x in placed.split("\\N")))
+kontrol("Signs are never wrapped", "\\N" not in A.olaya_yerlestir(long_tr, e, "sign", 42)[0])
+merged = {"parts": ["{\\k1}", "a", "{\\k1}", "b", "{\\k1}", "c", "{\\k1}", "d"], "nonempty": [1, 3, 5, 7], "merged": True}
+kontrol("Merged placement wraps dialogue too", "\\N" in A.olaya_yerlestir("Bu da gerçekten çok uzun bir çeviri, sığmayacak kadar uzun.", merged, "dialogue", 42)[0])
+e3 = {"parts": ["{\\i1}", "A", "{\\i0}", " B ", "{\\b1}", "C"], "nonempty": [1, 3, 5], "merged": False}
+kontrol("Markers in the wrong order use safe placement", A.olaya_yerlestir("x⟦2⟧y⟦1⟧z", e3, "dialogue", 42)[1] is True
+        and A.olaya_yerlestir("x⟦1⟧y⟦2⟧z", e3, "dialogue", 42) == ("{\\i1}x{\\i0}y{\\b1}z", False))
+
+# Reviewer corrections must keep the exact marker sequence, not just the count.
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    a = dict(A.VARSAYILAN, backend="agy", model="fake"); A.configure(a, "en", "tr"); a.update(A.BACKEND_CONFIG)
+    a.update({k: td / k for k in ("work_dir", "jobs_dir", "library_dir", "watch")})
+    a.update(content_warnings=False, level_report=False, break_chapters=False, meaning_gate=False)
+    is_dir = a["work_dir"] / "Seri" / "S01E01"; is_dir.mkdir(parents=True)
+    seri = is_dir.parent / "series.md"; seri.write_text("series", encoding="utf-8")
+    (is_dir / "source.ass").write_text(_bos_ass + "Dialogue: 0,0:00:01.00,0:00:04.00,D,,0,0,0,,{\\i1}Hello{\\i0} world, {\\b1}friend\n", encoding="utf-8")
+    def route(model, prompt, schema, timeout, **k):
+        if schema is A.BAGLAM_SEMA:
+            return {x: [] for x in A.BAGLAM_SEMA["required"]}, {}
+        if schema is A.CEVIRI_SEMA:
+            return {"translations": {"1": "Merhaba⟦1⟧ dünya, ⟦2⟧dostum"}}, {}
+        if schema is A.INCELEME_SEMA:
+            return {"corrections": [{"id": "1", "category": "broken_format", "new": "Selam⟦2⟧ dünya, ⟦1⟧dostum", "reason": "x"}],
+                    "last_reviewed_id": "1"}, {}
+        raise AssertionError("unexpected call")
+    with patch.object(A, "model_cagir", side_effect=route), patch.object(A, "HATA_DOSYASI", None), patch.object(A, "log"):
+        k = A.bolum_isle(a, "Seri", 1, 1, None, None, "", seri, False, None)
+    dz = A.joku(is_dir / "corrections.json")
+    kontrol("A correction with swapped markers is rejected", k["correction_count"] == 0 and dz["rejected"][0]["rejected"].startswith("broken format")
+            and "{\\i1}Merhaba{\\i0} dünya, {\\b1}dostum" in (is_dir / "final.ass").read_text(encoding="utf-8"))
+    A.RECEIPT[:] = [None, ""]; A.RUN_FILE[0] = None
+
+# Source track selection: a full track that also has signs/songs is kept; forced and signs-only tracks are not.
+with tempfile.TemporaryDirectory() as td:
+    target = Path(td) / "source.ass"
+    titles = {0: ("English (Full + Signs/Songs)", 9), 1: ("Signs & Songs", 30), 2: ("Forced", 40), 3: ("Dialogue & Signs", 8),
+              4: ("Commentary (full)", 50)}
+    streams = [{"index": i, "codec_type": "subtitle", "codec_name": "ass", "tags": {"language": "eng", "title": t}} for i, (t, _) in titles.items()]
+    streams.append({"index": 5, "codec_type": "subtitle", "codec_name": "ass", "tags": {"language": "eng", "title": "English"}, "disposition": {"forced": 1}})
+    extracted = []
+    def fake_extract(cmd, **kwargs):
+        i = int(cmd[cmd.index("-map") + 1].split(":")[1]); extracted.append(i)
+        Path(cmd[-1]).write_text("\nDialogue:" * (titles.get(i, ("", 60))[1]))
+        return SimpleNamespace(returncode=0)
+    with patch.object(A, "ffprobe", return_value=streams), patch.object(A.subprocess, "run", side_effect=fake_extract):
+        selected = A.altyazi_sec(Path(td) / "video.mkv", target)
+    kontrol("Full track with signs/songs is a source candidate; forced, commentary and signs-only are not",
+            selected["track"] == 0 and sorted(extracted) == [0, 3])
+
+# Human candidates: forced and signs-only target tracks are skipped; the fullest platform track is delivered.
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    counts = {2: 3, 3: 12, 4: 50, 5: 60}
+    streams = [{"index": 2, "codec_type": "subtitle", "codec_name": "ass", "tags": {"language": "tur", "title": "Turkish (Netflix)"}},
+               {"index": 3, "codec_type": "subtitle", "codec_name": "ass", "tags": {"language": "tur", "title": "Turkish Full (Netflix)"}},
+               {"index": 4, "codec_type": "subtitle", "codec_name": "ass", "tags": {"language": "tur", "title": "Signs (Netflix)"}},
+               {"index": 5, "codec_type": "subtitle", "codec_name": "ass", "tags": {"language": "tur", "title": "Turkish"}, "disposition": {"forced": 1}}]
+    def fake_extract(cmd, **kwargs):
+        Path(cmd[-1]).write_text("\nDialogue:" * counts[int(cmd[cmd.index("-map") + 1].split(":")[1])])
+        return SimpleNamespace(returncode=0)
+    with patch.object(A, "ffprobe", return_value=streams), patch.object(A.subprocess, "run", side_effect=fake_extract), patch.object(A, "log"):
+        cands = A.insan_adaylari(td / "Show - 01.mkv", 1, 1, td, dosyalar=False)
+        pro = A.profesyonel_iz({}, td / "Show - 01.mkv", 1, 1, td)
+    kontrol("Forced and signs-only target tracks are not human translations; fullest first",
+            [c["track"] for c in cands] == [3, 2] and pro and pro["track"] == 3)
+    kontrol("Signs-only/forced filenames are not human candidates", A.kismi_iz("Show.S01E01.tr.forced") and A.kismi_iz("Show - 01 [Signs]")
+            and not A.kismi_iz("Show - 01 [Full + Signs]"))
+
+# Dialogue units: only layered copies share a unit; a line said again later is its own unit. Signs keep merging.
+A.configure(dict(A.VARSAYILAN, backend="agy", model="fake"), "en", "tr")
+_dup = A.Ass(_bos_ass + "Dialogue: 0,0:00:01.00,0:00:02.00,D,,0,0,0,,Wait!\n"
+             "Dialogue: 1,0:00:01.00,0:00:02.00,D,,0,0,0,,Wait!\n"          # layered copy (overlap)
+             "Dialogue: 0,0:00:02.10,0:00:03.00,D,,0,0,0,,Wait!\n"          # continues within 0.2 s
+             "Dialogue: 0,0:00:08.00,0:00:09.00,D,,0,0,0,,Wait!\n"          # said again 5 s later
+             "Dialogue: 0,0:00:08.00,0:00:09.00,Other,,0,0,0,,Wait!\n"      # overlapping, other style
+             "Dialogue: 0,0:00:01.00,0:00:02.00,Sign,,0,0,0,,EXIT\n"
+             "Dialogue: 0,0:00:40.00,0:00:41.00,Sign,,0,0,0,,EXIT\n")
+_units, _map = A.birimleri_cikar(_dup)
+_ids = [_map[o["index"]]["id"] for o in _dup.olaylar]
+kontrol("Layered dialogue copies share a unit; repeats and other styles do not; signs still merge",
+        _ids[0] == _ids[1] == _ids[2] and len({_ids[2], _ids[3], _ids[4]}) == 3 and _ids[5] == _ids[6] and len(_units) == 4)
+
+# Season from input names; conflicts stop; --episodes errors and unsafe titles are handled.
+kontrol("Season numbers from names", A.sezon_no("Show S02E05 1080p") == 2 and A.sezon_no("Show Season_3") == 3
+        and A.sezon_no("Show - 05") is None and A.sezon_no("Season 2023") is None)
+kontrol("Title folder names never escape the output root", A.klasor_adi("../../etc/x") == "etc x" and A.klasor_adi("..") == "Untitled"
+        and A.klasor_adi("Show: Part 2") == "Show: Part 2")
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    show = td / "Show Season 2"; show.mkdir()
+    (show / "Show - 01.mkv").write_bytes(b"v")
+    extra = td / "extra"; extra.mkdir()
+    (extra / "Show S01E01.ass").write_bytes(("[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+                                             "Dialogue: 0,0:00:01.00,0:00:02.00,D,,0,0,0,,Café\n").encode("cp1252"))
+    ext_src = td / "ext.ass"; ext_src.write_bytes(_bos_ass.encode("cp1252") + "Dialogue: 0,0:00:01.00,0:00:02.00,D,,0,0,0,,Señor\n".encode("cp1252"))
+    def settings():
+        a = dict(A.VARSAYILAN, backend="agy", model="fake", human_check=False, share_prompt=False)
+        a.update({k: td / "out" / k for k in ("work_dir", "jobs_dir", "library_dir", "watch")})
+        return a
+    calls, series = [], []
+    def episode(a, eser, sezon, n, v, k, *rest):
+        calls.append((eser, sezon, n))
+        return {"episode": f"S{sezon:02d}E{n:02d}", "units": 0, "correction_count": 0, "warning_count": 0, "untranslated": [], "minutes": 0,
+                "library_dir": "x"}
+    def prepare(a, eser, sources, path, guide):
+        series.append([(label, Path(f).read_text(encoding="utf-8")) for label, f in sources])
+        (path / "series.md").write_text("series", encoding="utf-8")
+    def run(argv):
+        with patch.object(sys, "argv", ["dragoman", *argv, "--target", "tr"]), patch.object(A, "ayarlar", side_effect=lambda *x: settings()), \
+                patch.object(A.shutil, "which", return_value=None), patch.object(A, "bolum_isle", side_effect=episode), \
+                patch.object(A, "seri_hazirla", side_effect=prepare), patch.object(A, "altyazi_sec", side_effect=lambda v, h: h.write_text(_bos_ass, encoding="utf-8")) as emb, \
+                patch.object(A, "log"), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+            try:
+                A.main(); code = 0
+            except SystemExit as e:
+                code = e.code
+        return code, emb.called, err.getvalue()
+    code, emb_called, _ = run([str(show), "--source-subtitle", str(ext_src), "--series-source", str(extra)])
+    kontrol("Season comes from the folder name when --season is absent", code == 0 and calls == [("Show Season 2", 2, 1)])
+    kontrol("--source-subtitle: the embedded track of that episode is not also read for the series guide", not emb_called)
+    kontrol("Series-source labels carry the season; non-UTF-8 inputs are decoded",
+            series and [l for l, _ in series[0]] == ["S01E01", "S02E01"] and "Café" in series[0][0][1] and "Señor" in series[0][1][1])
+    code, _, _ = run([str(show), "--season", "3", "--no-human-check"])
+    kontrol("--season conflicting with the input name stops", code not in (0, None) and "conflicts" in str(code))
+    code, _, err = run([str(show), "--episodes", "1-x"])
+    kontrol("Invalid --episodes is a usage error", code == 2 and "--episodes" in err)
+    calls.clear()
+    code, _, _ = run([str(show), "--title", "../../evil", "--season", "2"])
+    kontrol("A title with path parts stays inside the output root", code == 0 and calls[0][0] == "evil" and (td / "out" / "work_dir" / "evil").is_dir())
+
+# External source subtitles: encoding detected; a changed --source-subtitle is refused on resume.
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    is_dir = td / "job"; is_dir.mkdir()
+    src = td / "ext.ass"; src.write_bytes(_bos_ass.encode("cp1252") + "Dialogue: 0,0:00:01.00,0:00:02.00,D,,0,0,0,,Señor\n".encode("cp1252"))
+    ass, _ = A.kaynagi_hazirla(is_dir, None, src)
+    kontrol("Non-UTF-8 source subtitle is decoded", "Señor" in A.Ass.metin(ass, ass.olaylar[0]))
+    A.kaynagi_hazirla(is_dir, None, src)
+    src.write_bytes(src.read_bytes().replace(b"Se", b"Mi"))
+    try:
+        A.kaynagi_hazirla(is_dir, None, src); refused = ""
+    except A.BolumHatasi as e:
+        refused = str(e)
+    kontrol("A changed --source-subtitle is refused with a --redo hint", "--redo" in refused)
+
+# Quota waits: model ids are matched case-insensitively; threads share one reading; a far reset fails clearly.
+_real_quota = _guard_quota.temp_original
+A.configure(dict(A.VARSAYILAN, backend="agy", model="fake", max_quota_wait_seconds=3600), "en", "tr")
+def _usage_json(minutes):
+    t = (A.dt.datetime.now(A.dt.timezone.utc) + A.dt.timedelta(minutes=minutes)).isoformat().replace("+00:00", "Z")
+    return SimpleNamespace(stdout=_j.dumps({"command": {"data": {"groups": [{"name": "Gemini Models", "buckets": [
+        {"remaining_fraction": 0.0, "reset_time": t}]}]}}}))
+A._KOTA_BITIS.clear()
+with patch.object(A.subprocess, "run", return_value=_usage_json(30)) as usage, patch.object(A.time, "sleep") as sleep, patch.object(A, "log"):
+    first = _real_quota("Gemini-4-Hydrogen-Medium")
+    second = _real_quota("gemini-4-hydrogen-high")
+kontrol("Quota wait: upper-case model ids match their group; a second thread reuses the reading",
+        first and second and usage.call_count == 1 and sleep.call_count == 2 and 1800 < sleep.call_args_list[0].args[0] < 2000)
+A._KOTA_BITIS.clear()
+with patch.object(A.subprocess, "run", return_value=_usage_json(300)), patch.object(A.time, "sleep") as sleep, patch.object(A, "log"):
+    try:
+        _real_quota("gemini-x"); far = ""
+    except A.ModelHatasi as e:
+        far = str(e)
+kontrol("Quota reset beyond max_quota_wait_seconds stops with a clear error", "max_quota_wait_seconds" in far and not sleep.called
+        and A.error_category(far) == "quota")
+A._KOTA_BITIS.clear()
+
+# Usage numbers: OpenAI names and None values are normalized everywhere.
+kontrol("Usage normalizer", A.kullanim_sayilari({"prompt_tokens": 5, "completion_tokens": 3, "output_tokens": None,
+                                                 "completion_tokens_details": {"reasoning_tokens": 2}})
+        == {"input_tokens": 5, "output_tokens": 3, "thinking_tokens": 2} and A.kullanim_sayilari(None)["input_tokens"] == 0)
+with tempfile.TemporaryDirectory() as td:
+    rec = Path(td) / "r.jsonl"
+    rec.write_text("\n".join(_j.dumps({"time": "2026-01-01T00:00:00", "episode": "E", "status": "SUCCESS", "seconds": 1, "usage": u})
+                             for u in ({"prompt_tokens": 4, "completion_tokens": 1}, {"input_tokens": None, "output_tokens": 2}, None)), encoding="utf-8")
+    r = A.receipt_summary(rec, "E")
+kontrol("Receipt totals read OpenAI usage names and tolerate None", r["input_tokens"] == 4 and r["output_tokens"] == 3 and r["calls"] == 3)
+
+# Audio language tags compare case-insensitively.
+kontrol("Preferred audio language ignores tag case", A.ozgun_ses([{"index": 1, "codec_type": "audio", "tags": {"language": "ENG"}},
+                                                                   {"index": 2, "codec_type": "audio", "tags": {"language": "JPN"}}], "jpn")["index"] == 2)
+
+# Resume: a few untranslated units are retried alone; stale or empty-ended reviews are not trusted.
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    parca = [{"id": str(i), "kind": "dialogue", "style": "D", "text": f"Line {i} here.", "start": i, "end": i + 1} for i in (1, 2, 3)]
+    A.jyaz(td / "translations" / "001.json", {"translations": {"1": "a", "3": "c"}, "untranslated": ["2"], "blocked": [], "usage": []})
+    with patch.object(A, "_cevir_istek", return_value=({"2": "b"}, {"input_tokens": 1})) as istek, patch.object(A, "log"):
+        r = A.cevir_parca({}, 1, parca, [], [], "", "", td)
+    kontrol("A chunk with a few untranslated units retries only those units", [b["id"] for b in istek.call_args.args[1]] == ["2"]
+            and r["untranslated"] == [] and r["translations"] == {"1": "a", "2": "b", "3": "c"})
+    ceviri = {"1": "a", "2": "b", "3": "c"}
+    with patch.object(A, "_incele_istek", return_value=(([], None), "", {})) as rv, patch.object(A, "tuzak_kur", return_value=None), patch.object(A, "log"):
+        r1 = A.incele_parca({}, 1, parca, ceviri, "", "", td)
+        A.incele_parca({}, 1, parca, ceviri, "", "", td)
+        r3 = A.incele_parca({}, 1, parca, {**ceviri, "2": "changed"}, "", "", td)
+    kontrol("An empty last_reviewed_id counts as possibly incomplete", r1["possibly_incomplete"] is True)
+    kontrol("A saved review is reused only for the same units and translations", rv.call_count == 2 and r3["signature"] != r1["signature"]
+            and any((td / "review").glob("001-stale-*.json")))
+    second = [{"id": "3", "category": "meaning_error", "new": "C", "reason": "second"}]
+    answers = iter([(([{"id": "1", "category": "meaning_error", "new": "A", "reason": "first"}], False), "3", {}), ((second, True), "3", {})])
+    with patch.object(A, "_incele_istek", side_effect=lambda *x: next(answers)), patch.object(A, "tuzak_kur", return_value={"id": "9"}), patch.object(A, "log"):
+        r = A.incele_parca({}, 2, parca, ceviri, "", "", td)
+    kontrol("After a missed trap, a valid second review replaces the first one's corrections", r["corrections"] == second and r["trap"] == [False, True])
+
+# Mux: a failure leaves no temporary files; TrueType fallbacks get their MIME type; chapter titles escape backslashes.
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    video = td / "v.mkv"; video.write_bytes(b"0" * 10)
+    sub = td / "f.ass"; sub.write_text(_bos_ass, encoding="utf-8")
+    font = td / "Extra.ttf"; font.write_bytes(b"x")
+    A.FALLBACK_PATHS[:] = [font]
+    seen = {}
+    def media(cmd, **kw):
+        if cmd[0] == "ffprobe" and "-show_chapters" in cmd:
+            return SimpleNamespace(stdout=_j.dumps({"chapters": [{"start_time": "0", "tags": {"title": "Intro\\Part"}}]}), returncode=0)
+        if cmd[0] == "ffprobe":
+            return SimpleNamespace(stdout="1500", returncode=0)
+        seen["cmd"] = cmd
+        seen["chapters"] = next(Path(c) for c in cmd if str(c).endswith(".chapters.txt")).read_text(encoding="utf-8")
+        Path(cmd[-1]).write_bytes(b"partial")
+        raise A.subprocess.CalledProcessError(1, cmd)
+    out = td / "watch" / "Show S01E01.mkv"
+    with patch.object(A, "ffprobe", return_value=[{"index": 0, "codec_type": "video", "codec_name": "h264"}]), \
+            patch.object(A.subprocess, "run", side_effect=media), patch.object(A.shutil, "disk_usage", return_value=SimpleNamespace(free=10**12)):
+        try:
+            A.paketle(video, sub, out, None, yedek_font=True, molalar=[{"t": 600.0}])
+        except A.subprocess.CalledProcessError:
+            pass
+    A.FALLBACK_PATHS[:] = []
+    kontrol("Failed mux removes the partial MKV and chapter file", sorted(x.name for x in out.parent.iterdir()) == [])
+    kontrol("TrueType fallback font is attached with a TrueType MIME type", "mimetype=application/x-truetype-font" in seen["cmd"]
+            and "mimetype=application/vnd.ms-opentype" in seen["cmd"])
+    kontrol("Chapter titles escape backslashes", "title=Intro\\\\Part" in seen["chapters"])
 
 # Golden file: a synthetic episode with a deterministic fake model must give exactly the stored output (line wrapping,
 # duration extension, tags, styles; karaoke, romaji and drawings untouched). DRAGOMAN_SAMPLES=<folder> runs the same

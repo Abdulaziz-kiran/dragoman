@@ -35,6 +35,8 @@ VARSAYILAN = {
     "content_warnings": True, "human_check": True, "human_threshold": 8.5,
     "break_chapters": True, "level_report": True, "learner_profile": "intermediate learner of the source language",
     "timeout_seconds": 900, "fallback_fonts": [], "share_prompt": True,
+    # agy backend: longest total wait for one quota reset per model call; a later reset stops the episode instead.
+    "max_quota_wait_seconds": 3600,
     # Reviewer corrections pass a separate meaning check before they are applied.
     "meaning_gate": True,
     # Readable speed in characters per second: translators see each line's duration; too-fast dialogue is extended.
@@ -244,32 +246,52 @@ GUVENLIK = ("safety filter", "content safety", "prohibited use", "sensitive word
             "finish_reason: safety", "finishreason.safety", "recitation", "content_filter", "refusal", "permission_denied: safety")
 
 
-def _kota_bekle(model: str, metin_ipucu: bool = False) -> bool:
-    try:
-        cikti = subprocess.run(["agy", "-p", "/usage", "--output-format", "json", "--print-timeout", "60s"],
-                               capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL, cwd=tempfile.gettempdir())
-        veri = json.loads(cikti.stdout)
-        grup_adi = "Gemini 4 Argon" if "argon" in model else ("Gemini Models" if "gemini" in model else "Claude and GPT models")
-        en_gec = None
-        for grup in veri["command"]["data"]["groups"]:
-            if grup["name"] != grup_adi:
-                continue
-            for kova in grup["buckets"]:
-                if kova["remaining_fraction"] < 0.02:
-                    t = dt.datetime.fromisoformat(kova["reset_time"].replace("Z", "+00:00"))
-                    en_gec = t if en_gec is None or t > en_gec else en_gec
-        if en_gec:
-            bekle = max(60, (en_gec - dt.datetime.now(dt.timezone.utc)).total_seconds() + 90)
-            log(f"Quota exhausted ({grup_adi}); {en_gec.astimezone():%d.%m %H:%M} waiting until reset ({bekle/60:.0f} minutes).")
-            time.sleep(bekle)
-            return True
+_KOTA_KILIDI = threading.Lock()
+_KOTA_BITIS: dict[str, float] = {}  # quota group -> time.time() until which a found reset already covers every thread
+
+
+def _kota_bekle(model: str, metin_ipucu: bool = False, beklenen: float = 0.0) -> bool:
+    """Wait for an exhausted agy quota group to reset. Parallel threads share one /usage reading; the total wait of one
+    call (`beklenen` already waited) is capped by max_quota_wait_seconds, beyond which the call fails with a clear error."""
+    model = model.lower()
+    grup_adi = "Gemini 4 Argon" if "argon" in model else ("Gemini Models" if "gemini" in model else "Claude and GPT models")
+    sinir = float(BACKEND_CONFIG.get("max_quota_wait_seconds") or 3600)
+    mesaj = None
+    with _KOTA_KILIDI:
+        bekle = _KOTA_BITIS.get(grup_adi, 0) - time.time()
+        if bekle <= 0:
+            bekle = None
+            try:
+                cikti = subprocess.run(["agy", "-p", "/usage", "--output-format", "json", "--print-timeout", "60s"],
+                                       capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL, cwd=tempfile.gettempdir())
+                veri = json.loads(cikti.stdout)
+                en_gec = None
+                for grup in veri["command"]["data"]["groups"]:
+                    if grup["name"] != grup_adi:
+                        continue
+                    for kova in grup["buckets"]:
+                        if kova["remaining_fraction"] < 0.02:
+                            t = dt.datetime.fromisoformat(kova["reset_time"].replace("Z", "+00:00"))
+                            en_gec = t if en_gec is None or t > en_gec else en_gec
+                if en_gec:
+                    bekle = max(60, (en_gec - dt.datetime.now(dt.timezone.utc)).total_seconds() + 90)
+                    mesaj = f"Quota exhausted ({grup_adi}); {en_gec.astimezone():%d.%m %H:%M} waiting until reset ({bekle/60:.0f} minutes)."
+            except Exception as e:
+                if metin_ipucu:
+                    bekle = 900
+                    mesaj = f"Could not read quota table ({e}); error indicates quota exhaustion; waiting 15 minutes."
+            if bekle is not None and beklenen + bekle <= sinir:
+                _KOTA_BITIS[grup_adi] = time.time() + bekle
+        else:
+            mesaj = f"Quota exhausted ({grup_adi}); another request is already waiting for the reset ({bekle/60:.0f} minutes)."
+    if bekle is None:
         return False
-    except Exception as e:
-        if metin_ipucu:
-            log(f"Could not read quota table ({e}); error indicates quota exhaustion; waiting 15 minutes.")
-            time.sleep(900)
-            return True
-        return False
+    if beklenen + bekle > sinir:
+        raise ModelHatasi(f"Quota exhausted ({grup_adi}); the reset is {bekle/60:.0f} minutes away, beyond max_quota_wait_seconds "
+                          f"({sinir:.0f}); rerun the same command after the reset")
+    log(mesaj)
+    time.sleep(bekle)
+    return True
 
 
 HATA_DOSYASI: Path | None = None
@@ -304,15 +326,29 @@ def receipt_write(model: str, stage: str | None, attempt: int, t0: float, status
         log(f"Could not write receipt: {e}")
 
 
+def kullanim_sayilari(usage) -> dict[str, int]:
+    """Token counts of one call under the internal names; OpenAI names (prompt/completion, reasoning details) and
+    missing or None values are normalized."""
+    usage = usage if isinstance(usage, dict) else {}
+    details = usage.get("completion_tokens_details")
+    details = details if isinstance(details, dict) else {}
+    def sayi(*values):
+        for v in values:
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                return int(v)
+        return 0
+    return {"input_tokens": sayi(usage.get("input_tokens"), usage.get("prompt_tokens")),
+            "output_tokens": sayi(usage.get("output_tokens"), usage.get("completion_tokens")),
+            "thinking_tokens": sayi(usage.get("thinking_tokens"), details.get("reasoning_tokens"))}
+
+
 def receipt_summary(path: Path, label: str, since: float = 0) -> dict:
     """All calls of one episode (failed attempts and warning, break and level calls included).
     `since`: first run of this job directory; calls of a job archived by --redo are not counted."""
     lines = [json.loads(x) for x in (path.read_text(encoding="utf-8").splitlines() if path.exists() else []) if x.strip()]
     lines = [x for x in lines if x.get("episode") == label
              and dt.datetime.fromisoformat(x.get("time", "1970-01-01T00:00:00")).timestamp() >= int(since) - 1]
-    total = {k: sum((x.get("usage") or {}).get(k, 0) for x in lines if isinstance(x.get("usage"), dict)
-                    and isinstance((x.get("usage") or {}).get(k, 0), (int, float)))
-             for k in ("input_tokens", "output_tokens", "thinking_tokens")}
+    total = {k: sum(kullanim_sayilari(x.get("usage"))[k] for x in lines) for k in ("input_tokens", "output_tokens", "thinking_tokens")}
     return {"calls": len(lines), "failed": sum(x.get("status") != "SUCCESS" for x in lines), **total,
             "minutes": round(sum(x.get("seconds", 0) for x in lines) / 60, 1), "file": str(path)}
 
@@ -518,7 +554,7 @@ def model_cagir(model: str, istem: str, sema: dict, zaman_asimi: int, deneme: in
         ids = re.findall(r"^([^ \n]+) \[[^\n]*\]:", istem.split("TRANSLATE:\n")[-1].split("\n\nNext lines")[0], re.M)
         sema = copy.deepcopy(sema)
         sema["properties"]["translations"] = {"type": "object", "properties": {i: {"type": "string"} for i in ids}, "required": ids}
-    son_hata, i, kota_beklemesi = "", 0, 0
+    son_hata, i, kota_beklemesi, kota_suresi = "", 0, 0, 0.0
     while i < deneme:
         retry_after = None
         t0 = time.time()
@@ -546,12 +582,14 @@ def model_cagir(model: str, istem: str, sema: dict, zaman_asimi: int, deneme: in
             fix = provider_fix(error, BACKEND_CONFIG)
             receipt_write(model, stage, i, t0, "ERROR", getattr(_CALL, "usage", None), fix or str(error))
             if fix:
-                RUN_STATS["errors"].add(error_category(error))
+                with _yaz_kilidi:
+                    RUN_STATS["errors"].add(error_category(error))
                 _hata_kaydi(model, fix)
                 raise ModelHatasi(fix) from None
             son_hata = _redact(str(error))
         son_hata = _redact(son_hata)
-        RUN_STATS["errors"].add(error_category(son_hata))
+        with _yaz_kilidi:
+            RUN_STATS["errors"].add(error_category(son_hata))
         _hata_kaydi(model, son_hata)
         metin = son_hata.lower()
         if any(g in metin for g in GUVENLIK):
@@ -561,9 +599,12 @@ def model_cagir(model: str, istem: str, sema: dict, zaman_asimi: int, deneme: in
             raise GuvenlikEngeli(son_hata)
         if any(y in metin for y in YAPILANDIRMA) or "unknown backend" in metin or "http 401" in metin or "http 403" in metin:
             raise ModelHatasi(f"Configuration error, not retried: {son_hata}")
+        kota_t0 = time.monotonic()
         if backend == "agy" and deneme > 1 and kota_beklemesi < 12 and _kota_bekle(model, metin_ipucu=any(
-                x in metin for x in ("quota", "exhaust", "429", "rate limit", "resource_exhausted", "limit reached", "usage limit"))):
+                x in metin for x in ("quota", "exhaust", "429", "rate limit", "resource_exhausted", "limit reached", "usage limit")),
+                beklenen=kota_suresi):
             kota_beklemesi += 1
+            kota_suresi += time.monotonic() - kota_t0
             continue
         if i + 1 >= deneme:
             break
@@ -661,7 +702,7 @@ def tur_bul(stil: str, metin: str) -> str:
 def birimleri_cikar(ass: Ass) -> tuple[list[dict], dict[int, dict]]:
     birimler: dict = {}
     esleme: dict[int, dict] = {}
-    son_gorulen: dict[str, tuple[float, float]] = {}
+    son_gorulen: dict[str, tuple[str, float]] = {}  # dialogue text -> (style, end of its latest copy)
     tekrar_sayac: dict[str, int] = {}
     for o in sorted(ass.olaylar, key=lambda o: ass.bas(o)):
         metin, stil = ass.metin(o), ass.stil(o)
@@ -679,17 +720,22 @@ def birimleri_cikar(ass: Ass) -> tuple[list[dict], dict[int, dict]]:
         tur = tur_bul(stil, metin)
         anahtar_k = anahtar
         if tur == "dialogue":
-
+            # Only layered copies (same style, overlapping or starting within 0.2 s of the previous copy's end) share a
+            # unit; a line spoken again later is a new unit with its own context.
             onceki = son_gorulen.get(anahtar)
-            if onceki and ass.bas(o) - onceki[1] > 15:
+            ayni = onceki is not None and onceki[0] == stil and ass.bas(o) <= onceki[1] + 0.2
+            if onceki is not None and not ayni:
                 tekrar_sayac[anahtar] = tekrar_sayac.get(anahtar, 0) + 1
             anahtar_k = (anahtar, tekrar_sayac.get(anahtar, 0))
+            son_gorulen[anahtar] = (stil, max(ass.son(o), onceki[1]) if ayni else ass.son(o))
         if anahtar_k not in birimler:
             birimler[anahtar_k] = {"id": str(len(birimler) + 1), "text": anahtar, "style": stil,
                                    "kind": tur, "start": ass.bas(o), "end": ass.son(o)}
-        son_gorulen[anahtar] = (ass.bas(o), max(ass.son(o), son_gorulen.get(anahtar, (0, 0))[1]))
         esleme[o["index"]] = {"id": birimler[anahtar_k]["id"], "parts": parcalar, "nonempty": dolu, "merged": birlesik}
     return list(birimler.values()), esleme
+
+
+KONUSMACI = re.compile(r"\s*[-‐–—]")
 
 
 def satir_kir(metin: str, sinir: int) -> str:
@@ -697,6 +743,9 @@ def satir_kir(metin: str, sinir: int) -> str:
         satirlar = metin.split("\\N")
         if all(columns(line) <= sinir for line in satirlar):
             return metin
+        if len(satirlar) > 1 and all(KONUSMACI.match(line) for line in satirlar[1:]):
+            # "- A\N- B": one speaker per line; wrap each speaker's part separately and keep the dash structure.
+            return "\\N".join(satir_kir(line, sinir) for line in satirlar)
         metin = " ".join(line.strip() for line in satirlar)
     if columns(metin) <= sinir:
         return metin
@@ -724,21 +773,23 @@ def olaya_yerlestir(ceviri: str, e: dict, tur: str, sinir: int) -> tuple[str, bo
     parcalar = list(e["parts"])
     dolu = e["nonempty"]
     uyari = False
+    kir = (lambda t: satir_kir(t, sinir)) if tur == "dialogue" else (lambda t: t)
     if e.get("merged"):
-        parcalar[dolu[0]] = ISARET.sub("", ceviri)
+        parcalar[dolu[0]] = kir(ISARET.sub("", ceviri))
         for i, p in enumerate(parcalar):
             if i != dolu[0] and not p.startswith("{"):
                 parcalar[i] = ""
     elif len(dolu) == 1:
-        parcalar[dolu[0]] = satir_kir(ceviri, sinir) if tur == "dialogue" else ceviri
+        parcalar[dolu[0]] = kir(ceviri)
     else:
-        bolumler = re.split(r"⟦\d+⟧", ceviri)
-        if len(bolumler) == len(dolu):
+        # Wrapping measures visible text only (markers are zero-width), so a break never moves a marker.
+        if ISARET.findall(ceviri) == [f"⟦{k}⟧" for k in range(1, len(dolu))]:
+            bolumler = ISARET.split(kir(ceviri))
             for k, i in enumerate(dolu):
                 parcalar[i] = bolumler[k]
         else:
             uyari = True
-            duz = ISARET.sub("", ceviri)
+            duz = kir(ISARET.sub("", ceviri))
             parcalar[dolu[0]] = duz
             for i in dolu[1:]:
                 parcalar[i] = ""
@@ -927,7 +978,6 @@ def font_duzelt(metin: str, kapsam: dict[str, set[int]]) -> tuple[str, list[str]
         if len(parca) != 10:
             continue
         if parca[3].strip() in katla:
-            parca[9] = ETIKET.sub(lambda m: m.group(0), parca[9])
             parca[9] = "".join(part if part.startswith("{") else fold_latin(part) for part in ETIKET.split(parca[9]))
         harf = {c for c in ETIKET.sub("", parca[9]).replace("\\N", " ").replace("\\h", " ") if not c.isspace()}
         def degis(m):
@@ -948,6 +998,17 @@ def ffprobe(video: Path) -> list[dict]:
     return json.loads(p.stdout)["streams"]
 
 
+def kismi_iz(baslik: str, akis: dict | None = None) -> bool:
+    """Forced, commentary, karaoke or signs/songs-only track (a full track that also has signs/songs is not one)."""
+    if re.search(r"\bforced\b|karaoke|commentary", baslik, re.I) or ((akis or {}).get("disposition") or {}).get("forced"):
+        return True
+    return bool(re.search(r"\bsigns?\b|\bsongs?\b|\btitles?\b", baslik, re.I)) and not re.search(r"\bfull\b|dialog|complete", baslik, re.I)
+
+
+def olay_sayisi(yol: Path) -> int:
+    return yol.read_text(encoding="utf-8", errors="replace").count("\nDialogue:")
+
+
 def altyazi_sec(video: Path, hedef: Path) -> dict:
     adaylar = []
     for s in ffprobe(video):
@@ -959,7 +1020,7 @@ def altyazi_sec(video: Path, hedef: Path) -> dict:
             continue
         if s.get("codec_name") not in ("ass", "ssa", "subrip", "mov_text", "webvtt"):
             continue
-        if re.search(r"\bsigns?\b|\bsongs?\b|\bforced\b|\btitles?\b|karaoke|commentary", baslik, re.I) or s.get("disposition", {}).get("forced"):
+        if kismi_iz(baslik, s):
             continue
         adaylar.append(s)
     if not adaylar:
@@ -968,7 +1029,7 @@ def altyazi_sec(video: Path, hedef: Path) -> dict:
     for s in adaylar:
         gecici = hedef.with_name(f"candidate-{s['index']}.ass")
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(video), "-map", f"0:{s['index']}", str(gecici)], check=True)
-        sayi = gecici.read_text(encoding="utf-8", errors="replace").count("\nDialogue:")
+        sayi = olay_sayisi(gecici)
         if sayi > en_cok:
             en_iyi, en_cok = (s, gecici), sayi
     s, dosya = en_iyi
@@ -985,7 +1046,7 @@ def ozgun_ses(akislar: list[dict], tercih: str | None) -> dict | None:
         return None
     for dil in (language(tercih)["codes"] if tercih else []):
         for s in sesler:
-            if s.get("tags", {}).get("language") == dil:
+            if (s.get("tags", {}).get("language") or "").lower() == dil:
                 return s
     return sesler[0]
 
@@ -1026,7 +1087,6 @@ def paketle(video: Path, ass: Path, cikti: Path, ses_tercih: str | None, yedek_f
     akislar = ffprobe(video)
     ses = ozgun_ses(akislar, ses_tercih) if ses_tercih else None
     av1 = any(s.get("codec_name") == "av1" for s in akislar if s.get("codec_type") == "video")
-    cikti.parent.mkdir(parents=True, exist_ok=True)
     gecici = cikti.with_name(cikti.stem + ".writing.mkv")
     k = ["ffmpeg", "-v", "error", "-y"]
     meta, isaret_sayisi = None, None
@@ -1050,7 +1110,8 @@ def paketle(video: Path, ass: Path, cikti: Path, ses_tercih: str | None, yedek_f
     ek_sayisi = sum(1 for s in akislar if s.get("codec_type") == "attachment")
     if yedek_font:
         for j, f in enumerate(FALLBACK_PATHS + YEDEK_DOSYALAR):
-            k += ["-attach", str(f), f"-metadata:s:t:{ek_sayisi + j}", "mimetype=application/vnd.ms-opentype",
+            mime = "application/x-truetype-font" if f.suffix.lower() in (".ttf", ".ttc") else "application/vnd.ms-opentype"
+            k += ["-attach", str(f), f"-metadata:s:t:{ek_sayisi + j}", f"mimetype={mime}",
                   f"-metadata:s:t:{ek_sayisi + j}", f"filename={f.name}"]
 
     k += ["-c", "copy", "-max_interleave_delta", "0", "-disposition:s", "0", "-disposition:s:0", "default",
@@ -1063,8 +1124,16 @@ def paketle(video: Path, ass: Path, cikti: Path, ses_tercih: str | None, yedek_f
         sira = [s["index"] for s in akislar if s.get("codec_type") == "audio"].index(ses["index"])
         k += [f"-disposition:a:{sira}", "default"]
     k += [str(gecici)]
-    subprocess.run(k, check=True)
+    try:
+        return _paketi_dogrula(video, ass, cikti, gecici, k, meta, isaret_sayisi, ses, av1, molalar, yedek_font)
+    finally:  # a failed mux or verification leaves no partial MKV, chapter file or verification copy behind
+        for f in (gecici, meta, gecici.with_name("verify.ass")):
+            if f is not None and f.exists():
+                f.unlink()
 
+
+def _paketi_dogrula(video, ass, cikti, gecici, k, meta, isaret_sayisi, ses, av1, molalar, yedek_font) -> dict:
+    subprocess.run(k, check=True)
     yeni = ffprobe(gecici)
     def sure(v):
         p = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(v)],
@@ -1298,7 +1367,7 @@ def durak_adaylari(a: dict, birimler: list[dict], is_dir: Path, baglam: dict | N
     return cevap.get("breaks", [])
 
 
-def mola_sec(adaylar: list[dict], birimler: list[dict], sure: float, mola_dk: float = 0) -> list[dict]:
+def mola_sec(adaylar: list[dict], birimler: list[dict], sure: float) -> list[dict]:
     diyalog = sorted((b for b in birimler if b["kind"] == "dialogue"), key=lambda b: b["start"])
     bul = {b["id"]: b for b in diyalog}
     noktalar = []
@@ -1331,7 +1400,7 @@ def bolum_isaretleri(video: Path, molalar: list[dict], sure: float, hedef: Path)
         son = noktalar[i + 1][0] if i + 1 < len(noktalar) else sure
         if son - bas < 1:
             continue
-        ad = ad.replace("=", "\\=").replace(";", "\\;").replace("#", "\\#")
+        ad = ad.replace("\\", "\\\\").replace("=", "\\=").replace(";", "\\;").replace("#", "\\#").replace("\n", " ")
         satir += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={int(bas * 1000)}", f"END={int(son * 1000)}", f"title={ad}"]
     hedef.write_text("\n".join(satir) + "\n", encoding="utf-8")
     return satir.count("[CHAPTER]")
@@ -1493,15 +1562,17 @@ def parca_yarima_al(dosya: Path, kullanim_devami: bool = False) -> None:
 def cevir_parca(a, no, parca, onceki, sonraki, rehber, seri, is_dir) -> dict:
     dosya = is_dir / "translations" / f"{no:03d}.json"
     sonuc = {"translations": {}, "untranslated": [], "blocked": [], "usage": []}
+    yarim = dosya.with_suffix(".partial.json")
     if dosya.exists():
         sonuc = joku(dosya)
         sonuc.setdefault("blocked", [])
-        if all(b["id"] in sonuc["translations"] or b["id"] in sonuc["untranslated"] or b["id"] in sonuc["blocked"] for b in parca):
+        if not all(b["id"] in sonuc["translations"] or b["id"] in sonuc["untranslated"] or b["id"] in sonuc["blocked"] for b in parca):
+            raise BolumHatasi(f"Chunk {no}: saved translations do not match this chunk ({dosya}); job plan needs inspection")
+        if not sonuc["untranslated"]:
             return sonuc
-
-        raise BolumHatasi(f"Chunk {no}: saved translations do not match this chunk ({dosya}); job plan needs inspection")
-    yarim = dosya.with_suffix(".partial.json")
-    if yarim.exists():
+        log(f"Chunk {no}: retrying {len(sonuc['untranslated'])} untranslated units.")
+        sonuc["untranslated"] = []
+    elif yarim.exists():
         y = joku(yarim)
         ids = {b["id"] for b in parca}
         sonuc["translations"].update({k: v for k, v in y.get("translations", {}).items() if k in ids})
@@ -1545,9 +1616,17 @@ def cevir_parca(a, no, parca, onceki, sonraki, rehber, seri, is_dir) -> dict:
 
 def incele_parca(a, no, parca, ceviri, rehber, seri, is_dir) -> dict:
     dosya = is_dir / "review" / f"{no:03d}.json"
+    imza = sha(json.dumps([(b["id"], ceviri.get(b["id"])) for b in parca], ensure_ascii=False))
     if dosya.exists():
-        return joku(dosya)
-    sonuc = {"corrections": [], "last_reviewed_id": None, "last_id": parca[-1]["id"], "usage": [], "blocked": [], "trap": []}
+        onceki = joku(dosya)
+        # Older records have no signature: their last id must still match.
+        if onceki.get("signature", imza) == imza and str(onceki.get("last_id")) == str(parca[-1]["id"]):
+            return onceki
+        eski = dosya.with_name(f"{dosya.stem}-stale-{time.time_ns()}.json")
+        os.replace(dosya, eski)
+        log(f"Review chunk {no}: saved review belongs to other units or translations; kept as {eski.name} and reviewing again.")
+    sonuc = {"corrections": [], "last_reviewed_id": None, "last_id": parca[-1]["id"], "usage": [], "blocked": [], "trap": [],
+             "ids": [b["id"] for b in parca], "signature": imza}
     kuyruk = [parca]
     while kuyruk:
         p = kuyruk.pop(0)
@@ -1559,8 +1638,11 @@ def incele_parca(a, no, parca, ceviri, rehber, seri, is_dir) -> dict:
                 sonuc["trap"].append(False)
                 d2, son, kul2 = _incele_istek(a, p, ceviri, rehber, seri, tuzak_kur(p, ceviri, no, 1))
                 sonuc["usage"].append(kul)
-                birlesik = {x["id"]: x for x in d[0] + d2[0]}
-                d, kul = (list(birlesik.values()), d2[1]), kul2
+                if d2[1] is not False:  # the second reviewer caught its trap (or had none): only its corrections count
+                    d, kul = d2, kul2
+                else:
+                    birlesik = {x["id"]: x for x in d[0] + d2[0]}
+                    d, kul = (list(birlesik.values()), d2[1]), kul2
             if d is not None and d[1] is not None:
                 sonuc["trap"].append(d[1])
             d = d[0]
@@ -1573,8 +1655,7 @@ def incele_parca(a, no, parca, ceviri, rehber, seri, is_dir) -> dict:
         sonuc["corrections"] += d; sonuc["usage"].append(kul); sonuc["last_reviewed_id"] = son
     if sonuc["blocked"]:
         log(f"Review chunk {no}: {len(sonuc['blocked'])} units blocked by content safety.")
-    sonuc["possibly_incomplete"] = bool(sonuc["last_reviewed_id"]) and str(sonuc["last_reviewed_id"]) != str(parca[-1]["id"]) \
-        and not sonuc["blocked"]
+    sonuc["possibly_incomplete"] = str(sonuc["last_reviewed_id"] or "") != str(parca[-1]["id"]) and not sonuc["blocked"]
     jyaz(dosya, sonuc)
     log(f"Review chunk {no} complete ({len(sonuc['corrections'])} corrections)."
         + (" Reviewer may not have read to the end." if sonuc["possibly_incomplete"] else ""))
@@ -1631,7 +1712,7 @@ def sansur_tara(a, birimler, is_dir) -> dict:
         return v if "status" in v else {"status": "complete", "scenes": v.get("scenes", []), "unscanned": []}
     satirlar = [f'{b["id"]} [{sn_ass(b["start"])}] {b["text"]}' for b in birimler if b["kind"] == "dialogue"]
     ids = [b["id"] for b in birimler if b["kind"] == "dialogue"]
-    sahneler, taranamayan, kuyruk = [], [], [(0, len(satirlar))]
+    sahneler, taranamayan, kuyruk = [], [], [(0, len(satirlar))] if satirlar else []
     while kuyruk:
         i, j = kuyruk.pop(0)
         try:
@@ -1655,7 +1736,8 @@ def sansur_tara(a, birimler, is_dir) -> dict:
 
 def metin_oku(yol: Path) -> str:
     ham = yol.read_bytes()
-    for kod in ("utf-8-sig", "utf-16", "cp1252", "latin-1"):
+    # UTF-16 only with a byte-order mark: without one, any even-length legacy file would "decode" as UTF-16 garbage.
+    for kod in ("utf-8-sig",) + (("utf-16",) if ham[:2] in (b"\xff\xfe", b"\xfe\xff") else ()) + ("cp1252", "latin-1"):
         try:
             return ham.decode(kod)
         except UnicodeDecodeError:
@@ -1678,10 +1760,11 @@ def translation_sanity(text: str, source: str) -> bool:
 
 
 def _ass_yap(yol: Path, hedef: Path) -> Path:
+    """External .ass/.ssa/.srt as a UTF-8 ASS file (encoding detected by metin_oku)."""
     hedef.parent.mkdir(parents=True, exist_ok=True)
     gecici = hedef.with_suffix(yol.suffix.lower() + ".utf8")
     gecici.write_text(metin_oku(yol), encoding="utf-8")
-    if yol.suffix.lower() in (".ass", ".ssa"):
+    if yol.suffix.lower() == ".ass":
         gecici.replace(hedef)
     else:
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-sub_charenc", "UTF-8", "-i", str(gecici), str(hedef)], check=True)
@@ -1691,7 +1774,7 @@ def _ass_yap(yol: Path, hedef: Path) -> Path:
 
 def insan_adaylari(video: Path | None, sezon: int, no: int | None, is_dir: Path, dosyalar: bool = True) -> list[dict]:
     """Target-language subtitles for this episode: files beside the video (up to two levels down) and embedded tracks."""
-    adaylar = []
+    adaylar, gomulu = [], []
     if video is None:
         return adaylar
     for f in sorted(video.parent.rglob("*")) if dosyalar else []:
@@ -1699,7 +1782,7 @@ def insan_adaylari(video: Path | None, sezon: int, no: int | None, is_dir: Path,
             continue
         ad = f"{f.parent.name}/{f.stem}"
         m = re.search(r"[Ss](\d+)[Ee]\d+", ad)
-        if (int(m.group(1)) if m else 1) != sezon or (no is not None and bolum_no(f.stem) != no):
+        if (int(m.group(1)) if m else 1) != sezon or (no is not None and bolum_no(f.stem) != no) or kismi_iz(f.stem):
             continue
         try:
             if not target_tagged(ad):
@@ -1709,14 +1792,17 @@ def insan_adaylari(video: Path | None, sezon: int, no: int | None, is_dir: Path,
         adaylar.append({"source": str(f), "kind": "file"})
     for akis in ffprobe(video):
         dil = (akis.get("tags") or {}).get("language", "").lower()
-        if akis.get("codec_type") == "subtitle" and dil in TARGET["codes"] and akis.get("codec_name") in ("ass", "ssa", "subrip", "mov_text"):
+        baslik = (akis.get("tags") or {}).get("title", "")
+        if akis.get("codec_type") == "subtitle" and dil in TARGET["codes"] and akis.get("codec_name") in ("ass", "ssa", "subrip", "mov_text") \
+                and not kismi_iz(baslik, akis):
             hedef = is_dir / "human" / f"embedded-{akis['index']}.ass"
             if not hedef.exists():
                 hedef.parent.mkdir(parents=True, exist_ok=True)
                 subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(video), "-map", f"0:{akis['index']}", str(hedef)], check=True)
-            adaylar.append({"source": str(hedef), "kind": "embedded track", "track": akis["index"],
-                            "title": (akis.get("tags") or {}).get("title", "")})
-    return adaylar
+            gomulu.append({"source": str(hedef), "kind": "embedded track", "track": akis["index"], "title": baslik,
+                           "events": olay_sayisi(hedef)})
+    # Several embedded tracks: the one with the most dialogue events first (stable for equal counts).
+    return adaylar + sorted(gomulu, key=lambda x: -x["events"])
 
 
 def _diyaloglar(ass: "Ass") -> list[tuple[float, float, str]]:
@@ -1833,7 +1919,7 @@ def profesyonel_iz(a: dict, video: Path | None, sezon: int, no: int | None, is_d
     Downloaded files beside the video are ignored; an embedded track without a platform tag (fansub) does not stop
     translation and stays in the MKV."""
     adaylar = insan_adaylari(video, sezon, no, is_dir, dosyalar=False)
-    for x in adaylar:
+    for x in sorted(adaylar, key=lambda x: -x.get("events", 0)):
         iz = PROFESYONEL.search(x.get("title", "")) or (notr_baslik(x.get("title", "")) and DOSYA_PLATFORM.search(video.name))
         if iz:
             secim = {**x, "ass": x["source"], "offset_seconds": 0.0, "score": None, "decision": "professional track",
@@ -1998,6 +2084,20 @@ def uyari_olaylari(birimler: list[dict], sahneler: list[dict], bicim: list[str])
     return olaylar, kayit
 
 
+def uyari_katmani(a: dict, birimler: list[dict], tarama: dict, ass: "Ass") -> tuple[list[str], list[dict], str | None]:
+    """Warning events, record ranges and the overlay style for a finished scan (an unavailable scan stays loud)."""
+    gecerli = [s for s in tarama["scenes"] if "error" not in s] + tarama.get("unscanned", [])
+    if birimler and tarama["status"] == "failed":
+        gecerli = [{"first_id": birimler[0]["id"], "last_id": birimler[0]["id"], "reason": LABELS["scan_unavailable_episode"]}]
+    if not gecerli:
+        return [], [], None
+    ek_olaylar, kayit = uyari_olaylari(birimler, gecerli, ass.bicim)
+    boyut = max(12, round(ass.play_res_y() * 0.042))
+    ek_stil = (f"Style: ContentWarning,Arial,{boyut},&H0000E5FF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,"
+               f"{max(1, boyut // 18)},0,8,20,20,{max(10, boyut // 2)},1")
+    return ek_olaylar, kayit, ek_stil
+
+
 def bolum_no(ad: str) -> int | None:
 
     temiz = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", ad)
@@ -2018,6 +2118,18 @@ def bolum_no(ad: str) -> int | None:
         return int(m.group(1) or m.group(2))
     sayilar = re.findall(r"(?<![A-Za-z0-9])(\d{2,3})" + son, temiz, re.I)
     return int(sayilar[-1]) if sayilar else None
+
+
+def sezon_no(ad: str) -> int | None:
+    """Season number in a file or folder name (S02E05, Season 2, Season_02), or None."""
+    m = re.search(r"(?<![A-Za-z0-9])S(\d{1,2})[ _.-]*E\d{1,3}", ad, re.I) or re.search(r"(?<![A-Za-z0-9])Season[ _.-]*(\d{1,2})(?![0-9])", ad, re.I)
+    return int(m.group(1)) if m else None
+
+
+def klasor_adi(ad: str) -> str:
+    """A title used as a folder name never contains a path separator or a parent reference."""
+    ad = re.sub(r"\s+", " ", re.sub(r"[/\\]+|\.\.+", " ", ad)).strip(" .-")
+    return ad or "Untitled"
 
 
 def bolum_isle(a: dict, eser: str, sezon: int, no: int | None, video: Path | None, kaynak_ass: Path | None,
@@ -2085,7 +2197,6 @@ def bolum_isle(a: dict, eser: str, sezon: int, no: int | None, video: Path | Non
             s = f.result()
             ceviri.update(s["translations"]); kullanim += s["usage"]; cevrilemedi += s["untranslated"]; filtre += s.get("blocked", [])
         tarama = sansur_isi.result() if sansur_isi else {"status": "off", "scenes": [], "unscanned": []}
-        sahneler = tarama["scenes"]
         ogrenme = ogrenme_isi.result() if ogrenme_isi else None
     if len(cevrilemedi) > max(3, len(birimler) // 50):
         for f in (is_dir / "translations").glob("[0-9][0-9][0-9].json"):
@@ -2117,7 +2228,7 @@ def bolum_isle(a: dict, eser: str, sezon: int, no: int | None, video: Path | Non
         if _sade(yeni_metin) == _sade(ceviri[d["id"]]):
             reddedilen.append({**d, "rejected": "no change"})
             continue
-        if len(ISARET.findall(yeni_metin)) != len(ISARET.findall(b["text"])) or (not cjk_allowed() and CJK.search(yeni_metin)):
+        if ISARET.findall(yeni_metin) != ISARET.findall(b["text"]) or (not cjk_allowed() and CJK.search(yeni_metin)):
             reddedilen.append({**d, "rejected": "broken format marker or invalid script"})
             continue
         uygulanan.append({"id": d["id"], "category": d.get("category"), "source": b["text"], "before": ceviri[d["id"]],
@@ -2150,17 +2261,7 @@ def bolum_isle(a: dict, eser: str, sezon: int, no: int | None, video: Path | Non
         sure = max(0.3, b["end"] - b["start"])
         if b["kind"] == "dialogue" and columns(ISARET.sub("", ceviri[b["id"]]).replace("\\N", " ")) / sure > a.get("reading_speed_threshold", 20):
             hizli += 1
-    ek_olaylar, sansur_kayit = ([], [])
-    ek_stil = None
-    gecerli = [s for s in sahneler if "error" not in s] + tarama.get("unscanned", [])
-    if sansur_acik and birimler and tarama["status"] == "failed":
-
-        gecerli = [{"first_id": birimler[0]["id"], "last_id": birimler[0]["id"], "reason": LABELS["scan_unavailable_episode"]}]
-    if sansur_acik and gecerli:
-        ek_olaylar, sansur_kayit = uyari_olaylari(birimler, gecerli, ass.bicim)
-        boyut = max(12, round(ass.play_res_y() * 0.042))
-        ek_stil = (f"Style: ContentWarning,Arial,{boyut},&H0000E5FF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,"
-                   f"{max(1, boyut // 18)},0,8,20,20,{max(10, boyut // 2)},1")
+    ek_olaylar, sansur_kayit, ek_stil = uyari_katmani(a, birimler, tarama, ass) if sansur_acik else ([], [], None)
     jyaz(is_dir / "warnings.json", {"level": a["content_warnings"], "status": tarama["status"], "ranges": sansur_kayit, "scan": tarama})
     final = is_dir / "final.ass"
     final_metin = ass.yaz(yeni, ek_olaylar, ek_stil)
@@ -2196,7 +2297,7 @@ def bolum_isle(a: dict, eser: str, sezon: int, no: int | None, video: Path | Non
         paket = paketle(video, final, a["watch"] / eser / f"{ad}.mkv", ses, yedek_font=bool(font_degisen), ek=ek, molalar=molalar)
         if a["level_report"] and (is_dir / "level.md").exists():
             shutil.copyfile(is_dir / "level.md", a["watch"] / eser / f"{ad} - {LABELS['level_file']}.md")
-    toplam = {k: sum(u.get(k, 0) for u in kullanim) for k in ("input_tokens", "output_tokens", "thinking_tokens")}
+    toplam = {k: sum(kullanim_sayilari(u)[k] for u in kullanim) for k in ("input_tokens", "output_tokens", "thinking_tokens")}
     kayit = {"version": SURUM, "date": dt.datetime.now().isoformat(timespec="seconds"), "title": eser, "episode": etiket,
              "source": str(video or kaynak_ass), "source_language": SOURCE["code"], "target_language": TARGET["code"], "track": iz, "guide_hash": sha(rehber), "series_hash": sha(seri),
              "models": {"model_" + r: a.get("model_" + r) for r in ROLES},
@@ -2278,11 +2379,21 @@ def insan_teslim(a: dict, eser: str, sezon: int, no: int | None, video: Path, se
     baslangic = run_start(is_dir)
     final = is_dir / "final.ass"
     metin = ass_kaydir(Path(secim["ass"]).read_text(encoding="utf-8", errors="replace"), secim["offset_seconds"])
+    kaynak_var = (is_dir / "source.ass").exists()  # without a source track, breaks and the level report are skipped
+    tarama, sansur_kayit = {"status": "off", "scenes": [], "unscanned": []}, []
+    if a.get("content_warnings") is True:
+        insan_ass = Ass(metin)
+        taranan = Ass((is_dir / "source.ass").read_text(encoding="utf-8", errors="replace")) if kaynak_var else insan_ass
+        tb, _ = birimleri_cikar(taranan)
+        tarama = sansur_tara(a, tb, is_dir)
+        ek_olaylar, sansur_kayit, ek_stil = uyari_katmani(a, tb, tarama, insan_ass)
+        if ek_olaylar:
+            metin = insan_ass.yaz({}, ek_olaylar, ek_stil)
+        jyaz(is_dir / "warnings.json", {"level": a["content_warnings"], "status": tarama["status"], "ranges": sansur_kayit, "scan": tarama})
     metin, font_degisen = font_duzelt(metin, video_fontlari(video))
     final.write_text(metin, encoding="utf-8")
     ad, arsiv_ass = kutuphaneye_koy(a, eser, sezon, no, etiket, final)
     molalar = []
-    kaynak_var = (is_dir / "source.ass").exists()  # without a source track, breaks and the level report are skipped
     if mux and a["break_chapters"] and kaynak_var:
         kb, _ = birimleri_cikar(Ass((is_dir / "source.ass").read_text(encoding="utf-8", errors="replace")))
         molalar = mola_sec(durak_adaylari(a, kb, is_dir, None), kb, video_suresi(video))
@@ -2300,14 +2411,16 @@ def insan_teslim(a: dict, eser: str, sezon: int, no: int | None, video: Path, se
                                                                                   "coverage", "summary", "examples")},
              "source": str(video), "font_changes": font_degisen, "library_dir": str(arsiv_ass), "package": paket,
              "level_report": {"cefr": ogrenme["cefr"], "suitability": ogrenme["suitability"]} if ogrenme and "cefr" in ogrenme else None,
-             "units": 0, "correction_count": 0, "warning_count": 0, "untranslated": [], "minutes": run_minutes(is_dir),
+             "units": 0, "correction_count": 0, "warning_count": len(sansur_kayit), "warning_status": tarama["status"],
+             "untranslated": [], "minutes": run_minutes(is_dir),
              "minutes_this_run": round((time.time() - baslangic) / 60, 1),
              "receipts": receipt_summary(is_dir.parent / "receipts.jsonl", etiket, joku(is_dir / "runs.json")[0]["start"])}
     jyaz(is_dir / "record.json", kayit)
     hedef = a["jobs_dir"] / eser / etiket
     hedef.mkdir(parents=True, exist_ok=True)
     is_arsivini_yedekle(hedef, final)
-    for f in ("source.ass", "final.ass", "record.json", "track.json", "level.json", "level.md", "breaks.json", "break-candidates.json", "runs.json"):
+    for f in ("source.ass", "final.ass", "record.json", "track.json", "level.json", "level.md", "breaks.json", "break-candidates.json", "runs.json",
+              "warnings.json", "warning-scan.json"):
         if (is_dir / f).exists():
             shutil.copyfile(is_dir / f, hedef / f)
     shutil.copytree(is_dir / "human", hedef / "human", dirs_exist_ok=True)
@@ -2331,17 +2444,21 @@ def kaynagi_hazirla(is_dir: Path, video: Path | None, kaynak_ass: Path | None) -
         if gecici.exists():
             gecici.rename(gecici.with_name(f"source.writing-{time.time_ns()}.ass"))
         if kaynak_ass:
-            if kaynak_ass.suffix.lower() == ".ass":
-                shutil.copyfile(kaynak_ass, gecici)
-            else:
-                subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(kaynak_ass), str(gecici)], check=True)
+            _ass_yap(kaynak_ass, gecici)
         else:
             iz = altyazi_sec(video, gecici)
         iz = {**iz, "video": str(video) if video else None, "video_size": video.stat().st_size if video else None,
-              "external_source": str(kaynak_ass) if kaynak_ass else None}
+              "external_source": str(kaynak_ass) if kaynak_ass else None,
+              "external_source_sha": sha(kaynak_ass) if kaynak_ass else None}
         jyaz(is_dir / "track.json", iz)
         os.replace(gecici, kaynak)
-    iz = iz or joku(is_dir / "track.json", {})
+    else:
+        iz = joku(is_dir / "track.json", {})
+        # A changed source subtitle would otherwise resume silently on the old one.
+        if kaynak_ass and iz and (iz.get("external_source_sha") or iz.get("external_source") is None) \
+                and iz.get("external_source_sha") != sha(kaynak_ass):
+            raise BolumHatasi(f"The source subtitle differs from the one this job started with ({iz.get('external_source') or 'embedded track'}); "
+                              "use --redo to archive this job and restart with the new file")
     if video and iz.get("video_size") and iz["video_size"] != video.stat().st_size:
         raise BolumHatasi(f"This job directory belongs to a different video ({iz.get('video')}); two videos may share an episode number")
     return Ass(kaynak.read_text(encoding="utf-8", errors="replace")), iz
@@ -2545,14 +2662,12 @@ def stage_of(sema: dict) -> str | None:
 def record_usage(stage: str, usage: dict) -> None:
     if stage not in STAGES or not isinstance(usage, dict):
         return
-    details = usage.get("completion_tokens_details")
-    details = details if isinstance(details, dict) else {}
-    values = {"input": usage.get("input_tokens", usage.get("prompt_tokens", 0)),
-              "output": usage.get("output_tokens", usage.get("completion_tokens", 0)),
-              "reasoning": usage.get("thinking_tokens", details.get("reasoning_tokens", 0))}
-    bucket = RUN_STATS["stage_tokens"].setdefault(stage, {"input": 0, "output": 0, "reasoning": 0})
-    for key, value in values.items():
-        bucket[key] += _safe_count(value)
+    n = kullanim_sayilari(usage)
+    values = {"input": n["input_tokens"], "output": n["output_tokens"], "reasoning": n["thinking_tokens"]}
+    with _yaz_kilidi:  # parallel chunks update the same counters
+        bucket = RUN_STATS["stage_tokens"].setdefault(stage, {"input": 0, "output": 0, "reasoning": 0})
+        for key, value in values.items():
+            bucket[key] += _safe_count(value)
 
 
 def anonymous_report(a: dict, jobs: list[dict], elapsed: float, errors=(), stats=None) -> dict:
@@ -2684,7 +2799,8 @@ def main() -> None:
     ap.add_argument("--output", help="output root (default: ~/dragoman/)")
     ap.add_argument("--fallback-font", action="append", help="fallback font path; repeat to set preference order")
     ap.add_argument("--title", dest="eser", metavar="TITLE", help="production title (default: inferred from input)")
-    ap.add_argument("--season", dest="sezon", metavar="SEASON", type=int, default=1)
+    ap.add_argument("--season", dest="sezon", metavar="SEASON", type=int,
+                    help="season number (default: from S02E05 or 'Season 2' in the input name, else 1)")
     ap.add_argument("--episodes", dest="bolum", metavar="EPISODES", help="episodes/ranges in a directory: 1,3-5,7")
     ap.add_argument("--movie", dest="film", action="store_true", help="single movie without episode number")
     ap.add_argument("--episode", dest="no", metavar="EPISODE", type=int, help="episode number for subtitle-only input")
@@ -2802,14 +2918,18 @@ def main() -> None:
         videolar.append((None if x.film else bolum_no(girdi.stem), girdi))
         eser = x.eser or temiz_ad(girdi.parent.name if not x.film else girdi.stem)
 
+    eser = klasor_adi(eser)
     secili = videolar
     if x.bolum:
         istenen = set()
-        for p in x.bolum.split(","):
-            if "-" in p:
-                b, s = p.split("-"); istenen |= set(range(int(b), int(s) + 1))
-            else:
-                istenen.add(int(p))
+        try:
+            for p in x.bolum.split(","):
+                if "-" in p:
+                    b, s = p.split("-"); istenen |= set(range(int(b), int(s) + 1))
+                else:
+                    istenen.add(int(p))
+        except ValueError:
+            ap.error(f"Invalid --episodes value {x.bolum!r}; use episode numbers and ranges such as 1,3-5,7")
         secili = [(n, v) for n, v in videolar if n in istenen]
         if not secili:
             raise SystemExit(f"Requested episode not found: {x.bolum}")
@@ -2823,6 +2943,20 @@ def main() -> None:
 
             raise SystemExit("Missing or duplicate episode numbers; select with --episodes or fix filenames:\n"
                              + "\n".join(f"  {n}: {', '.join(adlar)}" for n, adlar in sorunlu.items()))
+    # Season: --season, else S02E05 / "Season 2" in the input name (file, or folder and its videos); a conflict stops.
+    adlar = [girdi.stem if girdi.is_file() else girdi.name] + [v.stem for _, v in secili if v != girdi]
+    if girdi.is_file() and sezon_no(girdi.stem) is None:
+        adlar.append(girdi.parent.name)
+    bulunan = sorted({n for n in map(sezon_no, adlar) if n is not None})
+    if x.sezon is not None and bulunan and bulunan != [x.sezon]:
+        raise SystemExit(f"--season {x.sezon} conflicts with the season in the input name (season {', '.join(map(str, bulunan))}); "
+                         "fix --season or the filenames")
+    if x.sezon is None:
+        if len(bulunan) > 1:
+            raise SystemExit(f"Input names contain several seasons ({', '.join(map(str, bulunan))}); select one with --season and --episodes")
+        x.sezon = bulunan[0] if bulunan else 1
+        if bulunan:
+            log(f"Season {x.sezon} (from the input name).")
     dis = Path(os.path.expanduser(x.kaynak)).resolve() if x.kaynak else None
     if dis and len(secili) != 1:
         raise SystemExit("--source-subtitle requires one video (select with --episodes)")
@@ -2888,7 +3022,7 @@ def main() -> None:
                         raise
                     log(f"No source subtitles ({etiket}): {e}; checking only for a professional {TARGET['name']} track."); bir = []
                 secim = insan_secimi(a, v, x.sezon, n, bir, rehber, is_dir)
-            except (SystemExit, subprocess.CalledProcessError, ValueError) as e:
+            except (BolumHatasi, SystemExit, subprocess.CalledProcessError, ValueError) as e:
                 log(f"Human translation check unavailable ({etiket}): {e}")
                 continue
             if not secim:
@@ -2906,41 +3040,36 @@ def main() -> None:
     seri_dosyasi = seri_dir / "series.md"
     if isler and not seri_dosyasi.exists():
         kaynaklar = []
-        okunacak = list(videolar)
+        # The episode given with --source-subtitle is read from that file, not from its embedded track.
+        okunacak = [(n, v) for n, v in videolar if not (dis and v == secili[0][1])]
         if x.seri_kaynak:
             ek = Path(os.path.expanduser(x.seri_kaynak))
-            okunacak += [(bolum_no(v.stem), v) for v in sorted(ek.iterdir()) if v.suffix.lower() in (".mkv", ".mp4", ".ass", ".srt")]
-        for n, v in sorted({str(v): (n, v) for n, v in okunacak}.values(), key=lambda t: (t[0] is None, t[0] or 0)):
-            etiket = f"E{n:02d}" if n is not None else v.stem
+            okunacak += [(bolum_no(v.stem), v) for v in sorted(ek.iterdir()) if v.suffix.lower() in (".mkv", ".mp4", ".ass", ".srt", ".ssa")]
+        # Labels carry the season so episode 1 of season 2 never replaces episode 1 of season 1.
+        okunacak = [(sezon_no(v.stem) or x.sezon, n, v) for n, v in okunacak]
+        for sz, n, v in sorted({str(v): (sz, n, v) for sz, n, v in okunacak}.values(), key=lambda t: (t[1] is None, t[0], t[1] or 0)):
+            etiket = f"S{sz:02d}E{n:02d}" if n is not None else v.stem
             hedef = seri_dir / "series-source" / f"{etiket}.ass"
             if not hedef.exists():
                 hedef.parent.mkdir(parents=True, exist_ok=True)
                 try:
-                    if v.suffix.lower() == ".ass":
-                        shutil.copyfile(v, hedef)
-                    elif v.suffix.lower() == ".srt":
-                        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(v), str(hedef)], check=True)
+                    if v.suffix.lower() in (".ass", ".srt", ".ssa"):
+                        _ass_yap(v, hedef)
                     else:
                         altyazi_sec(v, hedef)
                 except (SystemExit, subprocess.CalledProcessError) as e:
                     log(f"Series source skipped {v.name}: {e}")
                     continue
             kaynaklar.append((etiket, hedef))
+        girdiler = []
         if kaynak_ass:
-            kaynaklar.append((f"E{x.no:02d}" if x.no else "source", kaynak_ass))
+            girdiler.append((f"S{x.sezon:02d}E{x.no:02d}" if x.no else "source", kaynak_ass))
         if dis:
-            kaynaklar.append((f"E{secili[0][0]:02d}" if secili[0][0] is not None and not x.film else "source", dis))
+            girdiler.append((f"S{x.sezon:02d}E{secili[0][0]:02d}" if secili[0][0] is not None and not x.film else "source", dis))
+        for source_label, source_path in girdiler:  # read with encoding detection, converted to UTF-8 ASS
+            kaynaklar.append((source_label, _ass_yap(source_path, seri_dir / "series-source" / f"{source_label}.input.ass")))
         if not kaynaklar:
             raise SystemExit("No subtitles available for series guide")
-        converted_sources = []
-        for source_label, source_path in kaynaklar:
-            if source_path.suffix.lower() not in (".ass", ".ssa"):
-                prepared = seri_dir / "series-source" / f"{source_label}.ass"
-                prepared.parent.mkdir(parents=True, exist_ok=True)
-                subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(source_path), str(prepared)], check=True)
-                source_path = prepared
-            converted_sources.append((source_label, source_path))
-        kaynaklar = converted_sources
         RECEIPT[:] = [seri_dir / "receipts.jsonl", "series"]
         try:
             seri_hazirla(a, eser, kaynaklar, seri_dir, rehber)
