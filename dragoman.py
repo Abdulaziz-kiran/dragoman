@@ -23,7 +23,7 @@ import threading
 import time
 from pathlib import Path
 
-SURUM = "1.3.0"
+SURUM = "1.4.0"
 KOK = Path(__file__).resolve().parent
 EV = Path.home()
 VARSAYILAN = {

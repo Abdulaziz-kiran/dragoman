@@ -4,7 +4,7 @@ Genel talimattan sonra gelir. Türkçeye özgü durumları ve Türkçe çeviride
 
 ## Karakter sesi Türkçede neyle kurulur
 
-Türkçede mesafe ve kişilik şunlarla taşınır: sen/siz, emir kipinin biçimi ("Otur." / "Oturun." / "Buyurun, oturun."), rica kalıpları ("-ebilir misiniz"), cümle uzunluğu ve sözcük katmanı (gündelik ya da resmî sözcük). Karakterin sesini bunlarla ver.
+Türkçede mesafe ve kişilik şunlarla taşınır: sen/siz, emir kipinin biçimi ("Otur." / "Oturun." / "Buyurun, oturun."), rica kalıpları ("-ir misiniz", "rica etsem"), cümle uzunluğu ve sözcük katmanı (gündelik ya da resmî sözcük). Karakterin sesini bunlarla ver.
 
 Ses, kaynakta olmayan dolgu ve ünlemle kurulmaz. "be", "ya", "valla", "yahu", "lan" gibi sözcükler kaynakta karşılığı yoksa eklenmez; karşılıksız eklendiklerinde satırı laubali yapar. Kaynakta karşılığı varsa ("bro" → "abi", "you know" → "hani") kullanılabilir.
 
