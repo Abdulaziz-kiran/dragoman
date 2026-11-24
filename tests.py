@@ -59,6 +59,7 @@ for f in sorted(ORN.glob("*.ass")):
 kontrol('Wrap fits forty-two columns', all(len(x) <= 42 for x in A.satir_kir(
     "Bu neredeyse Uyuyan Güzel'in şatosu gibi görünüyor, gerçekten de öyle.", 42).split("\\N")))
 kontrol('Short lines remain unwrapped', A.satir_kir("Teşekkürler.", 42) == "Teşekkürler.")
+kontrol('No space around a line break', A.satir_kir("Bir saniye!\\N içeri giremezsin!", 42) == "Bir saniye!\\Niçeri giremezsin!")
 kontrol('Episode number in release filename', A.bolum_no("[DB]Puella Magi Madoka Magica_-_01_(Dual Audio_10bit_BD1080p_x265)") == 1)
 kontrol('Episode number after separator', A.bolum_no("[Anime Time] Monster - 57") == 57)
 kontrol('Season/episode filename', A.bolum_no("Hyouka S01E03") == 3)
@@ -2282,7 +2283,8 @@ def _identity(src: Path) -> bool:
     units, events = A.birimleri_cikar(ass)
     by_id = {u["id"]: u for u in units}
     new = {k: A.olaya_yerlestir(by_id[e["id"]]["text"], e, by_id[e["id"]]["kind"], 10**6)[0] for k, e in events.items() if not e["merged"]}
-    return ass.yaz(new, [], None) == text.replace("\r\n", "\n") and not any(A.CJK.search(u["text"]) for u in units)
+    bosluk = lambda t: re.sub(r"[ \t]*\\N[ \t]*", r"\\N", t)  # spaces around a line break are trimmed on purpose
+    return bosluk(ass.yaz(new, [], None)) == bosluk(text.replace("\r\n", "\n")) and not any(A.CJK.search(u["text"]) for u in units)
 
 
 _fx = _root / "fixtures"

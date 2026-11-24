@@ -23,7 +23,7 @@ import threading
 import time
 from pathlib import Path
 
-SURUM = "1.4.0"
+SURUM = "1.4.1"
 KOK = Path(__file__).resolve().parent
 EV = Path.home()
 VARSAYILAN = {
@@ -819,6 +819,7 @@ KONUSMACI = re.compile(r"(?:\s|⟦\d+⟧)*[-‐–—]")
 
 
 def satir_kir(metin: str, sinir: int) -> str:
+    metin = re.sub(r"[ \t]*\\N[ \t]*", r"\\N", metin)  # a model's "A\\N B" would start the second line with a space
     if "\\N" in metin:
         satirlar = metin.split("\\N")
         if all(columns(line) <= sinir for line in satirlar):

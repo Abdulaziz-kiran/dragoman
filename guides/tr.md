@@ -46,7 +46,7 @@ Türkçe fiil kişiyi zaten taşır. "Ben", "sen", "o" yalnız vurgu ya da karş
 - Mr. X → "X Bey", Mrs./Ms./Miss X → "X Hanım", Dr. X → "Doktor X", Professor X → "Profesör X". "Bay X / Bayan X" yazılmaz.
 - Unvan tek başına hitapsa: "Good luck, Mr. Detective." → "Bol şans, Dedektif Bey."
 - "Sir" ve "ma'am" bağlama göre "efendim" olur ya da düşer. Rütbeler Türkçeleşir: Captain → Yüzbaşı (gemide Kaptan), Lieutenant → Teğmen, Sergeant → Çavuş, Inspector → Komiser.
-- Japonca hitaplar (-san, -kun, -chan, -sama, -senpai, -sensei) kaynakta yazılıysa kaynaktaki yazımıyla kalır, Türkçe ek kesme işaretiyle gelir: "Tenma-san'ın". Kaynakta yoksa eklenmez.
+- Japonca hitaplar (-san, -kun, -sensei vb.) kaynakta yazılıysa kaynaktaki yazımıyla kalır, Türkçe ek kesme işaretiyle gelir: "Tenma-san'ın". Kaynakta yoksa eklenmez.
 
 ## Yön ve iyelik
 
